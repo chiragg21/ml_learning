@@ -1,0 +1,25 @@
+# Virtual environment
+.venv/
+.venv
+# direnv
+.envrc
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Environment / secrets
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+data
