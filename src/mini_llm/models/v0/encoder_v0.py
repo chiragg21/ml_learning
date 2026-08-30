@@ -1,4 +1,4 @@
-from ..template import Encoder, EncoderLayer
+from ..template import BaseEncoder, BaseEncoderLayer
 import torch
 import torch.nn as nn
 
@@ -76,7 +76,7 @@ total = 4*D*D + 2*D*F + 9*D + F
 [4*512*512+2*512*2048+9*512+2048 = 3,152,384]
 """
 
-class EncoderLayerV0(EncoderLayer, nn.Module):
+class EncoderLayerV0(BaseEncoderLayer):
 
     def __init__(
             self
@@ -140,7 +140,7 @@ Total Parameters = V*D + Smax*D + N*(4*D*D + 2*D*F + 9*D + F)
 """
 
 
-class EncoderV0(Encoder, nn.Module):
+class EncoderV0(BaseEncoder):
 
     def __init__(
             self

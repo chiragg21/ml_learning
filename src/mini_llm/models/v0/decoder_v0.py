@@ -1,4 +1,4 @@
-from ..template import Decoder, DecoderLayer
+from ..template import BaseDecoder, BaseDecoderLayer
 import torch
 from torch import nn
 
@@ -88,7 +88,7 @@ Feed Forward network:
     X3 = LayerNorm(X2 + Dropout(FNN(X2)))
 """
 
-class DecoderLayerV0(DecoderLayer, nn.Module):
+class DecoderLayerV0(BaseDecoderLayer):
     def __init__(
             self,
     ):
@@ -163,7 +163,7 @@ class DecoderLayerV0(DecoderLayer, nn.Module):
         return x
 
 
-class DecoderV0(Decoder, nn.Module):
+class DecoderV0(BaseDecoder):
     def __init__(
             self
         ):

@@ -101,11 +101,11 @@ class CharTokenizer:
 
     def decode(
         self,
-        token_ids: list[int] | torch.tensor,
+        token_ids: list[int] | torch.Tensor,
         skip_special_tokens: bool = True
     )->str:
 
-        if isinstance(token_ids, torch.tensor):
+        if isinstance(token_ids, torch.Tensor):
               token_ids = token_ids.tolist()
 
         tokens = []

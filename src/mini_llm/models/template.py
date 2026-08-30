@@ -1,11 +1,12 @@
 from abc import ABC, abstractmethod
 import torch
 from torch import nn    
+from ..datamodels import TransformerOutput
 
 
 ##Encoder
 
-class EncoderLayer:
+class BaseEncoderLayer(nn.Module, ABC):
     def __init__(
             self,
             d_model: int,
@@ -23,7 +24,7 @@ class EncoderLayer:
         pass
 
 
-class Encoder:
+class BaseEncoder(nn.Module, ABC):
     def __init__(
             self,
             vocab_size: int,
@@ -48,7 +49,7 @@ class Encoder:
 
 ## Decoder
 
-class DecoderLayer:
+class BaseDecoderLayer(nn.Module, ABC):
     def __init__(
             self,
             d_model: int,
@@ -65,7 +66,7 @@ class DecoderLayer:
     def forward(self):
         pass
 
-class Decoder:
+class BaseDecoder(nn.Module, ABC):
     def __init__(
             self,
             target_vocab_size: int,
@@ -86,4 +87,18 @@ class Decoder:
 
     @abstractmethod
     def forward(self):
+        pass
+
+
+## tranformer
+
+class BaseTransformer(nn.Module, ABC):
+
+    @abstractmethod
+    def forward(
+        self,
+        source_ids: torch.Tensor,
+        target_ids: torch.Tensor,
+        **kwargs,
+    ) -> TransformerOutput:
         pass
