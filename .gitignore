@@ -1,25 +1,32 @@
-# Virtual environment
-.venv/
-.venv
-# direnv
-.envrc
-
-# Python cache
+# Python
 __pycache__/
 *.py[cod]
+.pytest_cache/
+.ruff_cache/
 
-# Jupyter
-.ipynb_checkpoints/
+# Virtual environments
+.venv/
+.venv
+.envrc
 
-# Environment / secrets
+# Environment variables
 .env
 .env.*
 
-# IDE
-.vscode/
-.idea/
+# ML artifacts
+checkpoints/
+logs/
+
+# Data
+data
+
+# MLflow
+mlruns/
+mlflow.db
+mlartifacts/
+
+# Notebooks
+.ipynb_checkpoints/
 
 # OS
 .DS_Store
-
-data
