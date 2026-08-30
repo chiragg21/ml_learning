@@ -49,9 +49,41 @@ class Encoder:
 ## Decoder
 
 class DecoderLayer:
-    def __init__(self):
+    def __init__(
+            self,
+            d_model: int,
+            num_heads: int,
+            d_ff: int,
+            dropout_param: float=0.1,
+    ):
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.d_ff = d_ff
+        self.dropout_param = dropout_param
+
+    @abstractmethod
+    def forward(self):
         pass
 
 class Decoder:
-    def __init__(self):
+    def __init__(
+            self,
+            target_vocab_size: int,
+            max_seq_len: int,
+            d_model: int,
+            num_heads: int,
+            d_ff: int, 
+            num_layers: int,
+            dropout_param: float = 0.1,
+        ):
+        self.target_vocab_size = target_vocab_size
+        self.max_seq_len = max_seq_len
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.d_ff = d_ff
+        self.num_layers = num_layers
+        self.dropout_param = dropout_param
+
+    @abstractmethod
+    def forward(self):
         pass

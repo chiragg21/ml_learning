@@ -81,7 +81,7 @@ class EncoderLayerV0(EncoderLayer, nn.Module):
     def __init__(
             self
     ):
-        super.__init__()
+        super().__init__()
 
         self.self_attention = nn.MultiheadAttention(
             embed_dim=self.d_model,
