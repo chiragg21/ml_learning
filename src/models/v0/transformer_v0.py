@@ -1,9 +1,9 @@
 import torch
 from torch import nn
 from ..template import BaseTransformer
-from ...datamodels import TransformerOutput, TransformerConfigV0
-from ..v0.encoder_v0 import EncoderV0
-from ..v0.decoder_v0 import DecoderV0
+from .datamodels_v0 import TransformerOutput, TransformerConfigV0
+from .encoder_v0 import EncoderV0
+from .decoder_v0 import DecoderV0
 
 
 class TransformerV0(BaseTransformer):
@@ -11,10 +11,15 @@ class TransformerV0(BaseTransformer):
             self,
             config: TransformerConfigV0
     ):
-        super().__init__()  
+        super().__init__(config)
 
-        self.encoder = EncoderV0(config)
-        self.decoder = DecoderV0(config)
+        if config.encoder_config.d_model != config.decoder_config.d_model:
+            raise ValueError(
+                "Encoder and decoder d_model values must match for cross-attention."
+            )
+
+        self.encoder = EncoderV0(config.encoder_config)
+        self.decoder = DecoderV0(config.decoder_config)
 
         self.llm_head = nn.Linear(
             self.decoder.d_model,
@@ -49,6 +54,4 @@ class TransformerV0(BaseTransformer):
             return TransformerOutput(
                  logits=logits
             )
-
-
 

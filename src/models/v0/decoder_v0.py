@@ -1,4 +1,5 @@
 from ..template import BaseDecoder, BaseDecoderLayer
+from .datamodels_v0 import DecoderConfigV0, LayerConfigV0
 import torch
 from torch import nn
 
@@ -91,8 +92,13 @@ Feed Forward network:
 class DecoderLayerV0(BaseDecoderLayer):
     def __init__(
             self,
+            config: LayerConfigV0,
     ):
-        super().__init__()
+        super().__init__(config)
+        self.d_model = config.d_model
+        self.num_heads = config.num_heads
+        self.d_ff = config.d_ff
+        self.dropout_param = config.dropout_param
 
         self.self_attention = nn.MultiheadAttention(
             embed_dim=self.d_model,
@@ -154,10 +160,10 @@ class DecoderLayerV0(BaseDecoderLayer):
         )
 
         #Feed forward network
-        fnn_output = self.fnn(x)
+        ffn_output = self.ffn(x)
 
         x = self.norm3(
-            x+self.dropout(fnn_output)
+            x+self.dropout(ffn_output)
         )
 
         return x
@@ -165,9 +171,17 @@ class DecoderLayerV0(BaseDecoderLayer):
 
 class DecoderV0(BaseDecoder):
     def __init__(
-            self
+            self,
+            config: DecoderConfigV0,
         ):
-        super().__init__()
+        super().__init__(config)
+        self.target_vocab_size = config.target_vocab_size
+        self.max_seq_len = config.max_seq_len
+        self.d_model = config.d_model
+        self.num_heads = config.num_heads
+        self.d_ff = config.d_ff
+        self.num_layers = config.num_layers
+        self.dropout_param = config.dropout_param
 
         #target token embeddings
         self.token_embeddings = nn.Embedding(
@@ -187,10 +201,12 @@ class DecoderV0(BaseDecoder):
 
         self.layers = nn.ModuleList([
             DecoderLayerV0(
-                d_model = self.d_model,
-                num_heads = self.num_heads,
-                d_ff = self.d_ff,
-                dropout_param = self.dropout_param,
+                LayerConfigV0(
+                    d_model=self.d_model,
+                    num_heads=self.num_heads,
+                    d_ff=self.d_ff,
+                    dropout_param=self.dropout_param,
+                )
             )
             for _ in range(self.num_layers)
         ])

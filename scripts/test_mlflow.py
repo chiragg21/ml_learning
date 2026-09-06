@@ -1,5 +1,5 @@
 import mlflow
-from mini_llm.tracking.tracking import setup_mlflow
+from src.tracking.tracking import setup_mlflow
 
 def main():
     setup_mlflow()

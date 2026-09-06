@@ -1,4 +1,5 @@
 from ..template import BaseEncoder, BaseEncoderLayer
+from .datamodels_v0 import EncoderConfigV0, LayerConfigV0
 import torch
 import torch.nn as nn
 
@@ -79,14 +80,19 @@ total = 4*D*D + 2*D*F + 9*D + F
 class EncoderLayerV0(BaseEncoderLayer):
 
     def __init__(
-            self
+            self,
+            config: LayerConfigV0,
     ):
-        super().__init__()
+        super().__init__(config)
+        self.d_model = config.d_model
+        self.num_heads = config.num_heads
+        self.d_ff = config.d_ff
+        self.dropout_param = config.dropout_param
 
         self.self_attention = nn.MultiheadAttention(
             embed_dim=self.d_model,
-            num_heads=self.d_ff,
-            dropout=self.dropout,
+            num_heads=self.num_heads,
+            dropout=self.dropout_param,
             batch_first=True
         )
 
@@ -101,9 +107,9 @@ class EncoderLayerV0(BaseEncoderLayer):
 
         self.dropout = nn.Dropout(self.dropout_param)
 
-    def forward(self, x, key_padding_mask = True):
+    def forward(self, x, key_padding_mask = None):
 
-        attention_output = self.self_attention(
+        attention_output, _ = self.self_attention(
             x,
             x, 
             x,
@@ -143,10 +149,18 @@ Total Parameters = V*D + Smax*D + N*(4*D*D + 2*D*F + 9*D + F)
 class EncoderV0(BaseEncoder):
 
     def __init__(
-            self
+            self,
+            config: EncoderConfigV0,
         ):
 
-        super().__init__()
+        super().__init__(config)
+        self.vocab_size = config.vocab_size
+        self.max_seq_len = config.max_seq_len
+        self.d_model = config.d_model
+        self.num_heads = config.num_heads
+        self.d_ff = config.d_ff
+        self.num_layers = config.num_layers
+        self.dropout_param = config.dropout_param
 
         self.token_embedding = nn.Embedding(
             self.vocab_size,
@@ -162,10 +176,12 @@ class EncoderV0(BaseEncoder):
 
         self.layers = nn.ModuleList([
             EncoderLayerV0(
-                d_model = self.d_model,
-                num_heads = self.num_heads,
-                d_ff = self.d_ff,
-                dropout_param = self.dropout_param,
+                LayerConfigV0(
+                    d_model=self.d_model,
+                    num_heads=self.num_heads,
+                    d_ff=self.d_ff,
+                    dropout_param=self.dropout_param,
+                )
             )
             for _ in range(self.num_layers)
         ])
