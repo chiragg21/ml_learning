@@ -4,6 +4,29 @@ from typing import Any
 
 import mlflow
 
+from src.utils.hashing import config_to_dict
+
+
+def _flatten_params(
+    prefix: str,
+    value: Any,
+    out: dict[str, str],
+) -> None:
+
+    if isinstance(value, dict):
+
+        for key, val in value.items():
+
+            _flatten_params(
+                f"{prefix}.{key}" if prefix else str(key),
+                val,
+                out,
+            )
+
+        return
+
+    out[prefix] = str(value)
+
 
 class MLflowLogger:
 
@@ -127,35 +150,20 @@ class MLflowLogger:
         config,
         experiment_hash: str,
     ):
+        """
+        Flattens the whole config into dot-separated mlflow params, so new
+        config fields (new component types, new hyperparameters, ...) show
+        up automatically without touching this method.
+        """
 
-        self.log_params({
-            "schema_version":
-                config.schema_version,
+        flat_params: dict[str, str] = {}
 
-            "transformer":
-                config.model.transformer.name,
+        _flatten_params(
+            "",
+            config_to_dict(config),
+            flat_params,
+        )
 
-            "transformer_version":
-                config.model.transformer.version,
+        flat_params["config_hash"] = experiment_hash
 
-            "encoder_version":
-                config.model.encoder.version,
-
-            "decoder_version":
-                config.model.decoder.version,
-
-            "tokenizer":
-                config.tokenizer.name,
-
-            "tokenizer_version":
-                config.tokenizer.version,
-
-            "data":
-                config.data.name,
-
-            "data_version":
-                config.data.version,
-
-            "config_hash":
-                experiment_hash,
-        })
+        self.log_params(flat_params)

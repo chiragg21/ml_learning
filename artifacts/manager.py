@@ -5,7 +5,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from config.hashing import get_config_hash
+from src.utils.hashing import get_config_hash
 
 
 class ArtifactManager:
@@ -103,6 +103,16 @@ class ArtifactManager:
         return (
             self.experiment_dir(experiment_hash)
             / "tokenizer"
+        )
+
+    def tokenizer_path(
+        self,
+        experiment_hash: str,
+    ) -> Path:
+
+        return (
+            self.tokenizer_dir(experiment_hash)
+            / "tokenizer.pkl"
         )
 
     # ==================================================
@@ -297,6 +307,13 @@ class ExperimentManager:
         )
 
     @property
+    def tokenizer_path(self) -> Path:
+
+        return self.artifacts.tokenizer_path(
+            self.hash
+        )
+
+    @property
     def checkpoint_dir(self) -> Path:
 
         return self.artifacts.checkpoint_dir(
@@ -360,4 +377,35 @@ class ExperimentManager:
 
         return self.artifacts.load_json(
             self.config_path
+        )
+
+    # ==================================================
+    # Completion status
+    # ==================================================
+
+    def is_complete(self) -> bool:
+
+        if not self.metadata_path.exists():
+            return False
+
+        metadata = self.artifacts.load_json(
+            self.metadata_path
+        )
+
+        return metadata.get("status") == "completed"
+
+    def mark_complete(
+        self,
+        *,
+        global_step: int,
+        metrics: dict[str, Any],
+    ) -> None:
+
+        self.artifacts.save_json(
+            self.metadata_path,
+            {
+                "status": "completed",
+                "global_step": global_step,
+                "metrics": metrics,
+            },
         )

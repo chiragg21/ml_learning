@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import random
 
-import numpy as np
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
 from artifacts.manager import ExperimentManager
-from models.factory import ModelFactory
-from training.checkpoint import CheckpointManager
+from src.data.seq2seq import make_collate_fn
+from src.evaluation.evaluator import Evaluator
+from src.models.factory import ModelFactory
+from src.training.checkpoint import CheckpointManager
 
 
 class Trainer:
@@ -18,6 +19,7 @@ class Trainer:
         self,
         config,
         train_dataset,
+        tokenizer,
         validation_dataset=None,
         *,
         experiment_manager=None,
@@ -25,6 +27,7 @@ class Trainer:
     ):
 
         self.config = config
+        self.tokenizer = tokenizer
 
         # =============================================
         # Experiment
@@ -52,7 +55,8 @@ class Trainer:
         # =============================================
 
         self.model = ModelFactory.create(
-            config
+            config,
+            tokenizer=tokenizer,
         )
 
         self.model.to(
@@ -63,11 +67,16 @@ class Trainer:
         # Data
         # =============================================
 
+        collate_fn = make_collate_fn(
+            tokenizer.pad_token_id
+        )
+
         self.train_loader = DataLoader(
             train_dataset,
             batch_size=config.training.batch_size,
             shuffle=True,
             num_workers=config.runtime.num_workers,
+            collate_fn=collate_fn,
         )
 
         self.validation_loader = None
@@ -79,15 +88,12 @@ class Trainer:
                 batch_size=config.training.batch_size,
                 shuffle=False,
                 num_workers=config.runtime.num_workers,
+                collate_fn=collate_fn,
             )
 
         # =============================================
         # Training
         # =============================================
-
-        self.criterion = (
-            nn.CrossEntropyLoss()
-        )
 
         self.optimizer = (
             self._create_optimizer()
@@ -101,6 +107,12 @@ class Trainer:
             CheckpointManager()
         )
 
+        self.evaluator = Evaluator(
+            model=self.model,
+            device=self.device,
+            pad_token_id=tokenizer.pad_token_id,
+        )
+
         self.global_step = 0
 
         # =============================================
@@ -108,3 +120,264 @@ class Trainer:
         # =============================================
 
         self.mlflow_logger = mlflow_logger
+
+    # ==================================================
+    # Setup helpers
+    # ==================================================
+
+    def _resolve_device(self) -> torch.device:
+
+        device = self.config.runtime.device
+
+        if device == "auto":
+
+            return torch.device(
+                "cuda"
+                if torch.cuda.is_available()
+                else "cpu"
+            )
+
+        return torch.device(device)
+
+    @staticmethod
+    def _set_seed(seed: int) -> None:
+
+        random.seed(seed)
+        torch.manual_seed(seed)
+
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+
+    def _create_optimizer(self) -> torch.optim.Optimizer:
+
+        training_config = self.config.training
+        name = training_config.optimizer.lower()
+
+        if name == "adamw":
+
+            return torch.optim.AdamW(
+                self.model.parameters(),
+                lr=training_config.learning_rate,
+                weight_decay=training_config.weight_decay,
+            )
+
+        if name == "adam":
+
+            return torch.optim.Adam(
+                self.model.parameters(),
+                lr=training_config.learning_rate,
+                weight_decay=training_config.weight_decay,
+            )
+
+        if name == "sgd":
+
+            return torch.optim.SGD(
+                self.model.parameters(),
+                lr=training_config.learning_rate,
+                weight_decay=training_config.weight_decay,
+            )
+
+        raise ValueError(
+            f"Unknown optimizer: {training_config.optimizer}"
+        )
+
+    def _create_scheduler(self):
+
+        scheduler = self.config.training.scheduler
+
+        if scheduler is None:
+            return None
+
+        if scheduler == "linear_warmup":
+
+            warmup_steps = max(
+                self.config.training.warmup_steps,
+                1,
+            )
+
+            def lr_lambda(step: int) -> float:
+                return min(1.0, step / warmup_steps)
+
+            return torch.optim.lr_scheduler.LambdaLR(
+                self.optimizer,
+                lr_lambda,
+            )
+
+        raise ValueError(
+            f"Unknown scheduler: {scheduler}"
+        )
+
+    # ==================================================
+    # Training loop
+    # ==================================================
+
+    def train(self) -> dict[str, float]:
+
+        training_config = self.config.training
+
+        if self.mlflow_logger is not None:
+
+            self.mlflow_logger.log_experiment_config(
+                self.config,
+                self.experiment.experiment_hash,
+            )
+
+        final_metrics: dict[str, float] = {}
+
+        for epoch in range(training_config.epochs):
+
+            train_metrics = self._train_epoch(epoch)
+            final_metrics = train_metrics
+
+            if self.validation_loader is not None:
+
+                validation_metrics = self.evaluator.evaluate(
+                    self.validation_loader
+                )
+
+                final_metrics = {
+                    **train_metrics,
+                    **{
+                        f"val_{key}": value
+                        for key, value in validation_metrics.items()
+                    },
+                }
+
+                if self.mlflow_logger is not None:
+
+                    self.mlflow_logger.log_metrics(
+                        {
+                            f"val_{key}": value
+                            for key, value in validation_metrics.items()
+                        },
+                        step=self.global_step,
+                    )
+
+        self.model.save_model(
+            self.experiment.model_path
+        )
+
+        self.experiment.mark_complete(
+            global_step=self.global_step,
+            metrics=final_metrics,
+        )
+
+        return final_metrics
+
+    def _train_epoch(self, epoch: int) -> dict[str, float]:
+
+        training_config = self.config.training
+
+        self.model.train()
+
+        total_loss = 0.0
+        total_batches = 0
+
+        self.optimizer.zero_grad()
+
+        for batch_index, batch in enumerate(self.train_loader):
+
+            loss = self._train_step(batch)
+
+            (
+                loss / training_config.gradient_accumulation_steps
+            ).backward()
+
+            is_accumulation_boundary = (
+                (batch_index + 1)
+                % training_config.gradient_accumulation_steps
+                == 0
+            )
+
+            if is_accumulation_boundary:
+
+                if training_config.gradient_clip_norm is not None:
+
+                    nn.utils.clip_grad_norm_(
+                        self.model.parameters(),
+                        training_config.gradient_clip_norm,
+                    )
+
+                self.optimizer.step()
+
+                if self.scheduler is not None:
+                    self.scheduler.step()
+
+                self.optimizer.zero_grad()
+
+                self.global_step += 1
+
+                should_checkpoint = (
+                    training_config.save_every_n_steps is not None
+                    and self.global_step
+                    % training_config.save_every_n_steps
+                    == 0
+                )
+
+                if should_checkpoint:
+                    self._save_checkpoint(epoch)
+
+                if self.mlflow_logger is not None:
+
+                    self.mlflow_logger.log_metric(
+                        "train_loss",
+                        loss.item(),
+                        step=self.global_step,
+                    )
+
+            total_loss += loss.item()
+            total_batches += 1
+
+        return {
+            "train_loss": total_loss / max(total_batches, 1)
+        }
+
+    def _train_step(self, batch: dict) -> torch.Tensor:
+
+        pad_token_id = self.tokenizer.pad_token_id
+
+        source_ids = batch["source_ids"].to(self.device)
+        target_ids = batch["target_ids"].to(self.device)
+
+        # Teacher forcing: decoder sees all but the last target token,
+        # and is scored against all but the first (the shifted labels).
+        decoder_input_ids = target_ids[:, :-1]
+        labels = target_ids[:, 1:]
+
+        source_key_padding_mask = (
+            source_ids == pad_token_id
+        )
+
+        target_key_padding_mask = (
+            decoder_input_ids == pad_token_id
+        )
+
+        output = self.model(
+            source_ids=source_ids,
+            target_ids=decoder_input_ids,
+            source_key_padding_mask=source_key_padding_mask,
+            target_key_padding_mask=target_key_padding_mask,
+        )
+
+        vocab_size = output.logits.size(-1)
+
+        loss = nn.functional.cross_entropy(
+            output.logits.reshape(-1, vocab_size),
+            labels.reshape(-1),
+            ignore_index=pad_token_id,
+        )
+
+        return loss
+
+    def _save_checkpoint(self, epoch: int) -> None:
+
+        self.checkpoint_manager.save(
+            self.experiment.checkpoint_path(
+                f"step_{self.global_step}"
+            ),
+            model=self.model,
+            optimizer=self.optimizer,
+            scheduler=self.scheduler,
+            epoch=epoch,
+            global_step=self.global_step,
+        )

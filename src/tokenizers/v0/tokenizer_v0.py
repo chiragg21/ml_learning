@@ -21,7 +21,6 @@ class CharTokenizer:
             text: str,
         ):
         self.vocab = self._build_vocabulary(text)
-        self.special_tokens = []
 
     def _build_vocabulary(
             self, 

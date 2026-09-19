@@ -16,9 +16,10 @@ __pycache__/
 # ML artifacts
 checkpoints/
 logs/
+artifacts/experiments/
 
-# Data
-data
+# Data (raw dataset dumps at the project root only - not src/data)
+/data
 
 # MLflow
 mlruns/

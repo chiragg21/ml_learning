@@ -2,59 +2,10 @@ from __future__ import annotations
 
 import torch
 
-from artifacts.manager import ExperimentManager
-from models.factory import ModelFactory
+from src.inference.base import LoadedExperiment
 
 
-class Generator:
-
-    def __init__(
-        self,
-        config,
-        *,
-        experiment_manager=None,
-        device="auto",
-    ):
-
-        self.config = config
-
-        self.experiment = (
-            experiment_manager
-            or ExperimentManager(
-                config,
-                create_directories=False,
-            )
-        )
-
-        self.device = self._resolve_device(
-            device
-        )
-
-        # =============================================
-        # Model
-        # =============================================
-
-        self.model = ModelFactory.create(
-            config
-        )
-
-        if not self.experiment.model_path.exists():
-
-            raise FileNotFoundError(
-                "Trained model not found at: "
-                f"{self.experiment.model_path}"
-            )
-
-        self.model.load_model(
-            self.experiment.model_path,
-            device=self.device,
-        )
-
-        self.model.to(
-            self.device
-        )
-
-        self.model.eval()
+class Generator(LoadedExperiment):
 
     # ==================================================
     # Generation
@@ -65,17 +16,23 @@ class Generator:
         self,
         source_ids: torch.Tensor,
         *,
-        bos_token_id: int,
-        eos_token_id: int,
         max_new_tokens: int = 128,
         temperature: float = 1.0,
-    ):
+    ) -> torch.Tensor:
 
         source_ids = source_ids.to(
             self.device
         )
 
         batch_size = source_ids.size(0)
+
+        bos_token_id = self.tokenizer.bos_token_id
+        eos_token_id = self.tokenizer.eos_token_id
+        pad_token_id = self.tokenizer.pad_token_id
+
+        source_key_padding_mask = (
+            source_ids == pad_token_id
+        )
 
         target_ids = torch.full(
             (batch_size, 1),
@@ -86,13 +43,14 @@ class Generator:
 
         for _ in range(max_new_tokens):
 
-            logits = self.model(
+            output = self.model(
                 source_ids=source_ids,
                 target_ids=target_ids,
+                source_key_padding_mask=source_key_padding_mask,
             )
 
             next_token_logits = (
-                logits[:, -1, :]
+                output.logits[:, -1, :]
             )
 
             next_token_logits = (
@@ -124,15 +82,27 @@ class Generator:
 
         return target_ids
 
-    @staticmethod
-    def _resolve_device(device):
+    # ==================================================
+    # Text in, text out
+    # ==================================================
 
-        if device == "auto":
+    def generate_text(
+        self,
+        text: str,
+        *,
+        max_new_tokens: int = 128,
+        temperature: float = 1.0,
+    ) -> str:
 
-            return torch.device(
-                "cuda"
-                if torch.cuda.is_available()
-                else "cpu"
-            )
+        source_ids = torch.tensor(
+            [self.tokenizer.encode(text)],
+            dtype=torch.long,
+        )
 
-        return torch.device(device)
+        target_ids = self.generate(
+            source_ids,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+        )
+
+        return self.tokenizer.decode(target_ids[0])

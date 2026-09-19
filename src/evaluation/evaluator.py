@@ -41,10 +41,27 @@ class Evaluator:
                 "target_ids"
             ].to(self.device)
 
-            logits = self.model(
-                source_ids=source_ids,
-                target_ids=target_ids,
+            # Teacher forcing: decoder sees all but the last target token,
+            # and is scored against all but the first (the shifted labels).
+            decoder_input_ids = target_ids[:, :-1]
+            labels = target_ids[:, 1:]
+
+            source_key_padding_mask = (
+                source_ids == self.pad_token_id
             )
+
+            target_key_padding_mask = (
+                decoder_input_ids == self.pad_token_id
+            )
+
+            output = self.model(
+                source_ids=source_ids,
+                target_ids=decoder_input_ids,
+                source_key_padding_mask=source_key_padding_mask,
+                target_key_padding_mask=target_key_padding_mask,
+            )
+
+            logits = output.logits
 
             vocab_size = logits.size(-1)
 
@@ -54,7 +71,7 @@ class Evaluator:
                         -1,
                         vocab_size,
                     ),
-                    target_ids.reshape(-1),
+                    labels.reshape(-1),
                     ignore_index=self.pad_token_id,
                     reduction="sum",
                 )
@@ -65,13 +82,13 @@ class Evaluator:
             )
 
             mask = (
-                target_ids
+                labels
                 != self.pad_token_id
             )
 
             correct_tokens += (
                 (
-                    predictions == target_ids
+                    predictions == labels
                 )
                 & mask
             ).sum().item()

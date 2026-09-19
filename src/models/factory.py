@@ -1,15 +1,43 @@
 from __future__ import annotations
 
-from typing import Type
+from typing import Callable, Type
 
 from src.models.template import BaseTransformer
+from src.models.v0.datamodels_v0 import (
+    DecoderConfigV0,
+    EncoderConfigV0,
+    TransformerConfigV0,
+)
 from src.models.v0.transformer_v0 import TransformerV0
 
 
-class ModelFactory:
+def _build_transformer_v0_config(config, tokenizer=None) -> TransformerConfigV0:
 
-    _registry: dict[str, Type[BaseTransformer]] = {
-        "transformer_v0": TransformerV0,
+    encoder_params = dict(config.model.encoder.parameters)
+    decoder_params = dict(config.model.decoder.parameters)
+
+    if tokenizer is not None:
+        encoder_params.setdefault("vocab_size", tokenizer.vocab_size)
+        decoder_params.setdefault("target_vocab_size", tokenizer.vocab_size)
+
+    return TransformerConfigV0(
+        encoder_config=EncoderConfigV0(**encoder_params),
+        decoder_config=DecoderConfigV0(**decoder_params),
+    )
+
+
+class ModelFactory:
+    """
+    Builds a registered transformer version from a generic ExperimentConfig.
+
+    Each registry entry maps a "{transformer.name}_{transformer.version}" key
+    to the model class plus a builder that adapts the generic ModelConfig
+    (transformer/encoder/decoder components) into that version's own config
+    dataclass. Register new versions here without touching src/models/vN/.
+    """
+
+    _registry: dict[str, tuple[Type[BaseTransformer], Callable]] = {
+        "transformer_v0": (TransformerV0, _build_transformer_v0_config),
     }
 
     @classmethod
@@ -17,6 +45,7 @@ class ModelFactory:
         cls,
         name: str,
         model_class: Type[BaseTransformer],
+        config_builder: Callable,
     ) -> None:
 
         if name in cls._registry:
@@ -24,12 +53,13 @@ class ModelFactory:
                 f"Model '{name}' is already registered."
             )
 
-        cls._registry[name] = model_class
+        cls._registry[name] = (model_class, config_builder)
 
     @classmethod
     def create(
         cls,
         config,
+        tokenizer=None,
     ) -> BaseTransformer:
 
         model_name = config.model.transformer.name
@@ -42,6 +72,11 @@ class ModelFactory:
                 f"Unknown model architecture: {key}"
             )
 
-        model_class = cls._registry[key]
+        model_class, config_builder = cls._registry[key]
 
-        return model_class(config)
+        model_config = config_builder(
+            config,
+            tokenizer=tokenizer,
+        )
+
+        return model_class(model_config)

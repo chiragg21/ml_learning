@@ -3,72 +3,12 @@ from __future__ import annotations
 import torch
 from torch.utils.data import DataLoader
 
-from artifacts.manager import ExperimentManager
-from models.factory import ModelFactory
-from evaluation.evaluator import Evaluator
+from src.data.seq2seq import make_collate_fn
+from src.evaluation.evaluator import Evaluator
+from src.inference.base import LoadedExperiment
 
 
-class Predictor:
-
-    def __init__(
-        self,
-        config,
-        *,
-        experiment_manager=None,
-        device="auto",
-    ):
-
-        self.config = config
-
-        # =============================================
-        # Experiment
-        # =============================================
-
-        self.experiment = (
-            experiment_manager
-            or ExperimentManager(
-                config,
-                create_directories=False,
-            )
-        )
-
-        # =============================================
-        # Device
-        # =============================================
-
-        self.device = self._resolve_device(
-            device
-        )
-
-        # =============================================
-        # Model
-        # =============================================
-
-        self.model = ModelFactory.create(
-            config
-        )
-
-        # =============================================
-        # Load trained model
-        # =============================================
-
-        if not self.experiment.model_path.exists():
-
-            raise FileNotFoundError(
-                "Trained model not found at: "
-                f"{self.experiment.model_path}"
-            )
-
-        self.model.load_model(
-            self.experiment.model_path,
-            device=self.device,
-        )
-
-        self.model.to(
-            self.device
-        )
-
-        self.model.eval()
+class Predictor(LoadedExperiment):
 
     # ==================================================
     # Prediction
@@ -114,11 +54,15 @@ class Predictor:
             dataset,
             batch_size=batch_size,
             shuffle=False,
+            collate_fn=make_collate_fn(
+                self.tokenizer.pad_token_id
+            ),
         )
 
         evaluator = Evaluator(
             model=self.model,
             device=self.device,
+            pad_token_id=self.tokenizer.pad_token_id,
         )
 
         metrics = evaluator.evaluate(
@@ -135,20 +79,3 @@ class Predictor:
         )
 
         return metrics
-
-    # ==================================================
-    # Device
-    # ==================================================
-
-    @staticmethod
-    def _resolve_device(device):
-
-        if device == "auto":
-
-            return torch.device(
-                "cuda"
-                if torch.cuda.is_available()
-                else "cpu"
-            )
-
-        return torch.device(device)
