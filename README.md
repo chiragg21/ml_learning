@@ -22,6 +22,10 @@ src/
     factory.py          # DataFactory: config -> (train_pairs, val_pairs, corpus)
     seq2seq.py           # Tokenizing dataset wrapper + padding collate_fn
     v0/toy_copy.py       # Placeholder synthetic dataset (pipeline validation only)
+    pipeline/
+      registry.py          # StepRegistry: name -> step function
+      pipeline.py           # DataPipeline: runs config-ordered steps over data
+      steps/                 # Your own step functions go here (auto-discovered)
   training/
     trainer.py           # Trainer: full training loop
     checkpoint.py         # CheckpointManager: save/load optimizer+model state
@@ -181,9 +185,55 @@ nothing in `Trainer`, `Evaluator`, `Predictor`, or `Generator` changes.
 2. Register it in `src/data/factory.py`'s `DataFactory._registry`.
 
 Note: `src/data/v0/toy_copy.py` is a synthetic placeholder (source ->
-reversed source) used only to validate the pipeline end-to-end. The real,
-configurable multi-step data-preparation pipeline is a planned future
-iteration, not part of this one.
+reversed source) used only to validate the pipeline end-to-end, not a real
+data source.
+
+## Data preparation pipeline (step-based)
+
+Any data source's `train_pairs`/`validation_pairs` can be run through an
+ordered sequence of named, config-selected steps before training uses them —
+this is where you add your own preprocessing/filtering/augmentation logic
+without touching `DataFactory`, `Trainer`, or anything else.
+
+**Step contract:** any callable `(data, **parameters) -> data`. A step
+receives whatever the previous step returned (or the raw pairs, if it's
+first) and returns the next stage's data — it doesn't need to know what ran
+before or after it.
+
+**Adding a step:**
+1. Create a new file under `src/data/pipeline/steps/`, e.g. `src/data/pipeline/steps/length_filter.py`.
+2. Write and register your function:
+   ```python
+   from src.data.pipeline.registry import StepRegistry
+
+   @StepRegistry.register("filter_by_length")
+   def filter_by_length(data, max_len):
+       return [(src, tgt) for src, tgt in data if len(src) <= max_len]
+   ```
+3. That's it — files under `src/data/pipeline/steps/` are auto-discovered (imported automatically) the moment the pipeline is used, so the `@StepRegistry.register(...)` call runs and the step becomes available by name. Nothing else needs to be edited or imported manually.
+4. `src/data/pipeline/steps/example_step.py` is a template showing the exact pattern (an `example_identity` step that just returns its input unchanged) — safe to delete once you've added your own.
+
+**Using steps from a config**, add them to `DataConfig.steps`:
+```python
+from src.datamodels import DataConfig, PipelineStepConfig
+
+DataConfig(
+    name="toy_copy",
+    version="v0",
+    parameters={...},
+    steps=(
+        PipelineStepConfig(name="filter_by_length", parameters={"max_len": 15}),
+        # more steps run in order, each fed the previous one's output
+    ),
+)
+```
+
+`DataFactory.build(config)` runs `train_pairs` and `validation_pairs`
+through this pipeline automatically (in that order) whenever `config.data.steps`
+is non-empty — this applies uniformly no matter which data source produced
+them, so the same step (e.g. a text cleaner) can be reused across multiple
+`DataConfig`s. Since `steps` is part of the config, changing it changes the
+experiment hash, same as any other config field.
 
 ## Known limitations / follow-ups
 

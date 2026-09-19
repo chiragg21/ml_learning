@@ -28,10 +28,17 @@ class TokenizerConfig:
 
 
 @dataclass(frozen=True)
+class PipelineStepConfig:
+    name: str
+    parameters: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class DataConfig:
     name: str
     version: str
     parameters: dict[str, Any] = field(default_factory=dict)
+    steps: tuple[PipelineStepConfig, ...] = ()
     extra: dict[str, Any] = field(default_factory=dict)
 
 

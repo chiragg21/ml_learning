@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Callable
 
+from src.data.pipeline.pipeline import DataPipeline
 from src.data.v0.toy_copy import build_toy_copy
 
 
@@ -9,8 +10,10 @@ class DataFactory:
     """
     Registry mapping "{data.name}_{data.version}" to a builder that returns
     (train_pairs, validation_pairs, tokenizer_corpus), where pairs are lists
-    of (source_text, target_text) tuples. Register new data sources here;
-    the real, configurable data-preparation pipeline is a future iteration.
+    of (source_text, target_text) tuples. Register new data sources here.
+    If config.data.steps is set, train_pairs and validation_pairs are each
+    run through that DataPipeline before being returned, regardless of
+    which data source produced them.
     """
 
     _registry: dict[str, Callable] = {
@@ -43,4 +46,15 @@ class DataFactory:
 
         builder = cls._registry[key]
 
-        return builder(config.data.parameters)
+        train_pairs, validation_pairs, corpus = builder(
+            config.data.parameters
+        )
+
+        if config.data.steps:
+
+            pipeline = DataPipeline(config.data.steps)
+
+            train_pairs = pipeline.run(train_pairs)
+            validation_pairs = pipeline.run(validation_pairs)
+
+        return train_pairs, validation_pairs, corpus
