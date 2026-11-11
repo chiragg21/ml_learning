@@ -31,3 +31,7 @@ mlartifacts/
 
 # OS
 .DS_Store
+
+export_bundle*.zip
+export_bundle*_staging/
+export_bundle/

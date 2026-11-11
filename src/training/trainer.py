@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import random
 
 import torch
@@ -243,6 +244,47 @@ class Trainer:
 
             def lr_lambda(step: int) -> float:
                 return min(1.0, step / warmup_steps)
+
+            return torch.optim.lr_scheduler.LambdaLR(
+                self.optimizer,
+                lr_lambda,
+            )
+
+        if scheduler == "cosine_warmup":
+
+            # v1's roadmap item: linear warmup up to warmup_steps, then
+            # cosine decay from the peak LR down to 0 over the rest of
+            # training. The cosine shape (vs. linear/step decay) spends
+            # more steps near the peak LR and tapers off smoothly at the
+            # end, which is the de facto standard LR schedule for
+            # training transformers from scratch.
+            warmup_steps = max(
+                self.config.training.warmup_steps,
+                1,
+            )
+
+            total_steps = max(
+                (
+                    len(self.train_loader)
+                    * self.config.training.epochs
+                )
+                // self.config.training.gradient_accumulation_steps,
+                warmup_steps + 1,
+            )
+
+            def lr_lambda(step: int) -> float:
+
+                if step < warmup_steps:
+                    return step / warmup_steps
+
+                progress = (
+                    (step - warmup_steps)
+                    / (total_steps - warmup_steps)
+                )
+
+                progress = min(progress, 1.0)
+
+                return 0.5 * (1.0 + math.cos(math.pi * progress))
 
             return torch.optim.lr_scheduler.LambdaLR(
                 self.optimizer,
