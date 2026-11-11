@@ -2,9 +2,15 @@
 # One-shot setup for a fresh Colab/Kaggle runtime: clone the repo (skipped
 # if you're already inside it), install the handful of deps that aren't
 # preinstalled, download the training data, train, then immediately
-# export and (on Colab) download the trained model/tokenizer/mlflow logs -
-# all in one script run, so there's no gap where the runtime could be
+# export the trained model/tokenizer/mlflow logs into one zip - all in
+# one script run, so there's no gap where the runtime could be
 # changed/disconnected before anything is saved off the VM.
+#
+# This script itself CANNOT trigger the browser download: it runs as a
+# shell subprocess (`!bash bootstrap_colab.sh`), and Colab's
+# google.colab.files.download() only works when called directly from a
+# real notebook code cell, in-kernel - not from any subprocess. See the
+# printed instructions at the end for the one extra cell that does that.
 #
 # Usage (paste into a Colab/Kaggle code cell, or run from a terminal):
 #   !bash bootstrap_colab.sh
@@ -45,15 +51,11 @@ python -m scripts.train --config "$CONFIG"
 # trained model if the runtime gets disconnected/changed in between.
 python -m scripts.export_artifacts
 
-# On Colab, trigger an actual browser download of the exported zip so
-# nothing further needs to be done by hand. On Kaggle (or anywhere else),
-# the zip is just left in the working directory - Kaggle's own Output
-# panel picks up files under /kaggle/working automatically.
-python -c "
-try:
-    from google.colab import files
-except ImportError:
-    pass
-else:
-    files.download('export_bundle.zip')
-"
+echo ""
+echo "Zip ready at: $(pwd)/export_bundle.zip"
+echo "On Kaggle: it will already show up in the Output panel."
+echo "On Colab: run this in a genuine code cell (not a !-prefixed shell"
+echo "cell - files.download() only works called directly, in-kernel):"
+echo ""
+echo "  from google.colab import files"
+echo "  files.download(\"$(pwd)/export_bundle.zip\")"
