@@ -63,6 +63,12 @@ class Trainer:
             self.device
         )
 
+        if config.runtime.compile_model:
+
+            self.model = torch.compile(
+                self.model
+            )
+
         # =============================================
         # Data
         # =============================================
@@ -71,12 +77,20 @@ class Trainer:
             tokenizer.pad_token_id
         )
 
+        # pin_memory speeds up host->device transfer and is only
+        # meaningful when that transfer target is a GPU.
+        pin_memory = self.device.type == "cuda"
+
+        persistent_workers = config.runtime.num_workers > 0
+
         self.train_loader = DataLoader(
             train_dataset,
             batch_size=config.training.batch_size,
             shuffle=True,
             num_workers=config.runtime.num_workers,
             collate_fn=collate_fn,
+            pin_memory=pin_memory,
+            persistent_workers=persistent_workers,
         )
 
         self.validation_loader = None
@@ -89,6 +103,8 @@ class Trainer:
                 shuffle=False,
                 num_workers=config.runtime.num_workers,
                 collate_fn=collate_fn,
+                pin_memory=pin_memory,
+                persistent_workers=persistent_workers,
             )
 
         # =============================================
@@ -111,6 +127,36 @@ class Trainer:
             model=self.model,
             device=self.device,
             pad_token_id=tokenizer.pad_token_id,
+        )
+
+        # =============================================
+        # Mixed precision
+        # =============================================
+
+        training_config = config.training
+
+        self.mixed_precision = (
+            training_config.mixed_precision
+            and training_config.precision in ("fp16", "bf16")
+        )
+
+        # fp16 autocast isn't practically supported on CPU (no native
+        # fp16 compute); fall back to bf16 there, which CPU does support.
+        self.amp_dtype = (
+            torch.float16
+            if training_config.precision == "fp16"
+            and self.device.type == "cuda"
+            else torch.bfloat16
+        )
+
+        # GradScaler is a no-op when enabled=False or dtype != fp16, so
+        # it's always safe to route through it regardless of settings.
+        self.scaler = torch.amp.GradScaler(
+            device=self.device.type if self.device.type == "cuda" else "cpu",
+            enabled=(
+                self.mixed_precision
+                and self.amp_dtype == torch.float16
+            ),
         )
 
         self.global_step = 0
@@ -279,9 +325,11 @@ class Trainer:
 
             loss = self._train_step(batch)
 
-            (
+            scaled_loss = (
                 loss / training_config.gradient_accumulation_steps
-            ).backward()
+            )
+
+            self.scaler.scale(scaled_loss).backward()
 
             is_accumulation_boundary = (
                 (batch_index + 1)
@@ -293,12 +341,15 @@ class Trainer:
 
                 if training_config.gradient_clip_norm is not None:
 
+                    self.scaler.unscale_(self.optimizer)
+
                     nn.utils.clip_grad_norm_(
                         self.model.parameters(),
                         training_config.gradient_clip_norm,
                     )
 
-                self.optimizer.step()
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
 
                 if self.scheduler is not None:
                     self.scheduler.step()
@@ -352,20 +403,26 @@ class Trainer:
             decoder_input_ids == pad_token_id
         )
 
-        output = self.model(
-            source_ids=source_ids,
-            target_ids=decoder_input_ids,
-            source_key_padding_mask=source_key_padding_mask,
-            target_key_padding_mask=target_key_padding_mask,
-        )
+        with torch.autocast(
+            device_type=self.device.type,
+            dtype=self.amp_dtype,
+            enabled=self.mixed_precision,
+        ):
 
-        vocab_size = output.logits.size(-1)
+            output = self.model(
+                source_ids=source_ids,
+                target_ids=decoder_input_ids,
+                source_key_padding_mask=source_key_padding_mask,
+                target_key_padding_mask=target_key_padding_mask,
+            )
 
-        loss = nn.functional.cross_entropy(
-            output.logits.reshape(-1, vocab_size),
-            labels.reshape(-1),
-            ignore_index=pad_token_id,
-        )
+            vocab_size = output.logits.size(-1)
+
+            loss = nn.functional.cross_entropy(
+                output.logits.reshape(-1, vocab_size),
+                labels.reshape(-1),
+                ignore_index=pad_token_id,
+            )
 
         return loss
 

@@ -1,8 +1,13 @@
 import mlflow
 
+# A local file store needs no separately-running server - works the same
+# on a home machine, Colab, or Kaggle without extra setup. Point this at
+# an http(s):// URL instead if you do want a shared/running tracking server.
+DEFAULT_TRACKING_URI = "file:./mlruns"
+
 
 def setup_mlflow(
-    tracking_uri: str = "http://127.0.0.1:5000",
+    tracking_uri: str = DEFAULT_TRACKING_URI,
     experiment_name: str = "mini-llm",
 ) -> None:
     mlflow.set_tracking_uri(tracking_uri)

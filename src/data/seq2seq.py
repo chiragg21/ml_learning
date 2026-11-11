@@ -10,31 +10,37 @@ class TokenizedSeq2SeqDataset(Dataset):
     Wraps a raw (source_text, target_text) pair dataset, tokenizing both
     sides with the experiment's tokenizer. Works with any DataFactory entry
     that yields text pairs and any tokenizer registered in TokenizerFactory.
+
+    Tokenizes everything once up front rather than per __getitem__ call -
+    with DataLoader re-iterating the same dataset every epoch, encoding on
+    the fly would otherwise re-tokenize every sample on every epoch.
     """
 
     def __init__(self, raw_pairs, tokenizer):
-        self.raw_pairs = raw_pairs
-        self.tokenizer = tokenizer
+
+        self.examples = [
+            {
+                "source_ids": torch.tensor(
+                    tokenizer.encode(source_text),
+                    dtype=torch.long,
+                ),
+                "target_ids": torch.tensor(
+                    tokenizer.encode(
+                        target_text,
+                        add_bos=True,
+                        add_eos=True,
+                    ),
+                    dtype=torch.long,
+                ),
+            }
+            for source_text, target_text in raw_pairs
+        ]
 
     def __len__(self) -> int:
-        return len(self.raw_pairs)
+        return len(self.examples)
 
     def __getitem__(self, index):
-
-        source_text, target_text = self.raw_pairs[index]
-
-        source_ids = self.tokenizer.encode(source_text)
-
-        target_ids = self.tokenizer.encode(
-            target_text,
-            add_bos=True,
-            add_eos=True,
-        )
-
-        return {
-            "source_ids": torch.tensor(source_ids, dtype=torch.long),
-            "target_ids": torch.tensor(target_ids, dtype=torch.long),
-        }
+        return self.examples[index]
 
 
 def make_collate_fn(pad_token_id: int):

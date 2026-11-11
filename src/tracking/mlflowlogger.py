@@ -142,8 +142,15 @@ class MLflowLogger:
         tags: dict[str, str],
     ):
 
-        mlflow.set_tags(tags)
-        
+        # MLflow's REST API rejects empty-string tag values (e.g.
+        # platform.processor() returning "" on many Linux hosts), so drop
+        # any tag that stringifies to empty rather than failing the run.
+        mlflow.set_tags({
+            key: value
+            for key, value in tags.items()
+            if str(value) != ""
+        })
+
 
     def log_experiment_config(
         self,

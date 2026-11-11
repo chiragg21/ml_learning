@@ -4,6 +4,8 @@ from typing import Callable
 
 from src.data.pipeline.pipeline import DataPipeline
 from src.data.v0.toy_copy import build_toy_copy
+from src.data.v0.translation import build_translation
+from src.data.v0.wikitext import build_wikitext
 
 
 class DataFactory:
@@ -18,6 +20,8 @@ class DataFactory:
 
     _registry: dict[str, Callable] = {
         "toy_copy_v0": build_toy_copy,
+        "wikitext_v0": build_wikitext,
+        "translation_v0": build_translation,
     }
 
     @classmethod
