@@ -1,9 +1,11 @@
 import mlflow
 
-# A local file store needs no separately-running server - works the same
+# A local SQLite store needs no separately-running server - works the same
 # on a home machine, Colab, or Kaggle without extra setup. Point this at
 # an http(s):// URL instead if you do want a shared/running tracking server.
-DEFAULT_TRACKING_URI = "file:./mlruns"
+# (Not plain "file:./mlruns": newer MLflow versions put the filesystem
+# store into maintenance mode and refuse to use it by default.)
+DEFAULT_TRACKING_URI = "sqlite:///mlflow.db"
 
 
 def setup_mlflow(
