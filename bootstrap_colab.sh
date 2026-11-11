@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # One-shot setup for a fresh Colab/Kaggle runtime: clone the repo (skipped
 # if you're already inside it), install the handful of deps that aren't
-# preinstalled, download the training data, and start training.
+# preinstalled, download the training data, train, then immediately
+# export and (on Colab) download the trained model/tokenizer/mlflow logs -
+# all in one script run, so there's no gap where the runtime could be
+# changed/disconnected before anything is saved off the VM.
 #
 # Usage (paste into a Colab/Kaggle code cell, or run from a terminal):
 #   !bash bootstrap_colab.sh
@@ -36,3 +39,21 @@ pip install -q mlflow datasets
 python -m scripts.download_data --dataset "$DATASET"
 
 python -m scripts.train --config "$CONFIG"
+
+# Export immediately after training, in the same script run - waiting
+# for a separate manual step here is exactly what risks losing the
+# trained model if the runtime gets disconnected/changed in between.
+python -m scripts.export_artifacts
+
+# On Colab, trigger an actual browser download of the exported zip so
+# nothing further needs to be done by hand. On Kaggle (or anywhere else),
+# the zip is just left in the working directory - Kaggle's own Output
+# panel picks up files under /kaggle/working automatically.
+python -c "
+try:
+    from google.colab import files
+except ImportError:
+    pass
+else:
+    files.download('export_bundle.zip')
+"
