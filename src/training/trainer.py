@@ -270,10 +270,22 @@ class Trainer:
 
         final_metrics: dict[str, float] = {}
 
+        print(
+            f"Starting training: {training_config.epochs} epochs, "
+            f"{len(self.train_loader)} batches/epoch, device={self.device}",
+            flush=True,
+        )
+
         for epoch in range(training_config.epochs):
 
             train_metrics = self._train_epoch(epoch)
             final_metrics = train_metrics
+
+            print(
+                f"[epoch {epoch + 1}/{training_config.epochs}] "
+                f"train: {train_metrics}",
+                flush=True,
+            )
 
             if self.validation_loader is not None:
 
@@ -288,6 +300,12 @@ class Trainer:
                         for key, value in validation_metrics.items()
                     },
                 }
+
+                print(
+                    f"[epoch {epoch + 1}/{training_config.epochs}] "
+                    f"validation: {validation_metrics}",
+                    flush=True,
+                )
 
                 if self.mlflow_logger is not None:
 
@@ -318,6 +336,13 @@ class Trainer:
 
         total_loss = 0.0
         total_batches = 0
+
+        num_batches = len(self.train_loader)
+
+        # Print ~10 progress lines per epoch so long runs never look
+        # stalled - this loop otherwise produces no output between
+        # epochs, which has been mistaken for a hang more than once.
+        log_every = max(1, num_batches // 10)
 
         self.optimizer.zero_grad()
 
@@ -378,6 +403,15 @@ class Trainer:
 
             total_loss += loss.item()
             total_batches += 1
+
+            if (batch_index + 1) % log_every == 0:
+
+                print(
+                    f"  epoch {epoch + 1} "
+                    f"batch {batch_index + 1}/{num_batches} "
+                    f"avg_loss={total_loss / total_batches:.4f}",
+                    flush=True,
+                )
 
         return {
             "train_loss": total_loss / max(total_batches, 1)
