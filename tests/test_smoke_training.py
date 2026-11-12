@@ -85,3 +85,10 @@ def test_toy_copy_wordpiece_v2_trains_end_to_end(tmp_path):
     metrics = _run_smoke_training("configs/toy_copy_wordpiece_v2.py", tmp_path)
 
     assert math.isfinite(metrics["train_loss"])
+
+
+def test_toy_copy_v2_trains_end_to_end(tmp_path):
+
+    metrics = _run_smoke_training("configs/toy_copy_v2.py", tmp_path)
+
+    assert math.isfinite(metrics["train_loss"])

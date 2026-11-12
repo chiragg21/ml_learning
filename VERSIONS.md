@@ -240,18 +240,37 @@ Still not implemented: Unigram/SentencePiece, and pretrained tokenizers.
 
 ---
 
-## Future: v2 - making it fast and able to handle long sequences
+## v2 - making it fast and able to handle long sequences (in progress)
 
-Not yet implemented - this is the plan. v2's theme is *efficiency*:
-everything so far has been about making the model learn *better*; v2 is
-about making it *affordable to run*, especially at generation time and
-with long sequences.
+**Code:** `src/models/v2/` (`modules_v2.py`, `encoder_v2.py`, `decoder_v2.py`, `transformer_v2.py`)
+**Try it:** `configs/toy_copy_v2.py`
 
-- **GQA (Grouped-Query Attention):** instead of every attention head
-  having its own key/value projections, share one set of keys/values
-  across a small group of query heads. Cuts the size of the KV cache
-  (below) and memory bandwidth at inference, with little quality loss -
-  used by LLaMA 2 70B onward, Mistral, and most current models.
+v2's theme is *efficiency*: everything so far has been about making the
+model learn *better*; v2 is about making it *affordable to run*,
+especially at generation time and with long sequences. It is being built
+one feature at a time; the first piece, GQA, is done. `transformer_v2`
+is a drop-in replacement for v1 (same `forward()` signature) and reuses
+v1's RMSNorm, RoPE and SwiGLU modules unchanged.
+
+| Piece | v1 | v2 | Why change |
+|---|---|---|---|
+| Attention | Every head has its own Q, K and V projection | **GQA**: one K/V head shared by a group of query heads (`num_kv_heads`) | Shrinks the K/V projections now and, later, the KV cache |
+
+**GQA (Grouped-Query Attention)** keeps one query projection per head
+but shares each key/value head across `num_heads / num_kv_heads` query
+heads. `num_kv_heads == num_heads` is ordinary multi-head attention
+(exactly v1's attention); `num_kv_heads == 1` is multi-query attention.
+Applied to both self- and cross-attention. Set `num_kv_heads` in the
+encoder/decoder `parameters` of the config (omitting it means no
+sharing). The saving at `D=256, H=8, num_kv_heads=2` is 98,304 attention
+parameters per module (262,144 -> 163,840), but the real payoff is
+inference memory: a KV cache stores K and V per past token, so its size
+scales with `num_kv_heads`, which is why the KV cache below is the
+natural next step. See `GroupedQueryAttentionV2` in `modules_v2.py`;
+properties are checked in `tests/test_gqa_v2.py`.
+
+### Still to do in v2
+
 - **KV cache:** during autoregressive generation, the decoder's
   key/value vectors for already-generated tokens never change - caching
   them instead of recomputing the whole sequence's attention at every
