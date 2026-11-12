@@ -18,6 +18,8 @@ class Generator(LoadedExperiment):
         *,
         max_new_tokens: int = 128,
         temperature: float = 1.0,
+        do_sample: bool = False,
+        top_k: int | None = None,
     ) -> torch.Tensor:
 
         source_ids = source_ids.to(
@@ -51,18 +53,41 @@ class Generator(LoadedExperiment):
 
             next_token_logits = (
                 output.logits[:, -1, :]
-            )
-
-            next_token_logits = (
-                next_token_logits
                 / temperature
             )
 
-            next_token = (
-                next_token_logits
-                .argmax(dim=-1)
-                .unsqueeze(-1)
-            )
+            if do_sample:
+
+                if top_k is not None:
+
+                    # Zero out everything outside the top_k logits before
+                    # sampling, so temperature can make output more varied
+                    # without the model ever picking a near-random,
+                    # garbage-low-probability character.
+                    top_values, top_indices = next_token_logits.topk(
+                        top_k, dim=-1
+                    )
+
+                    next_token_logits = torch.full_like(
+                        next_token_logits, float("-inf")
+                    ).scatter_(-1, top_indices, top_values)
+
+                probabilities = torch.softmax(next_token_logits, dim=-1)
+
+                next_token = torch.multinomial(
+                    probabilities, num_samples=1
+                )
+
+            else:
+
+                # argmax is unaffected by dividing by temperature (it
+                # never changes which logit is largest) - greedy decoding
+                # is deterministic regardless of temperature, by design.
+                next_token = (
+                    next_token_logits
+                    .argmax(dim=-1)
+                    .unsqueeze(-1)
+                )
 
             target_ids = torch.cat(
                 [
@@ -92,6 +117,8 @@ class Generator(LoadedExperiment):
         *,
         max_new_tokens: int = 128,
         temperature: float = 1.0,
+        do_sample: bool = False,
+        top_k: int | None = None,
     ) -> str:
 
         source_ids = torch.tensor(
@@ -103,6 +130,8 @@ class Generator(LoadedExperiment):
             source_ids,
             max_new_tokens=max_new_tokens,
             temperature=temperature,
+            do_sample=do_sample,
+            top_k=top_k,
         )
 
         return self.tokenizer.decode(target_ids[0])

@@ -14,6 +14,17 @@ def main() -> None:
     parser.add_argument("--text", required=True)
     parser.add_argument("--max-new-tokens", type=int, default=128)
     parser.add_argument("--temperature", type=float, default=1.0)
+    parser.add_argument(
+        "--sample",
+        action="store_true",
+        help="Sample instead of greedy decoding (makes --temperature actually do something).",
+    )
+    parser.add_argument(
+        "--top-k",
+        type=int,
+        default=None,
+        help="Only sample from the top-k most likely tokens (requires --sample).",
+    )
 
     args = parser.parse_args()
 
@@ -24,6 +35,8 @@ def main() -> None:
         args.text,
         max_new_tokens=args.max_new_tokens,
         temperature=args.temperature,
+        do_sample=args.sample,
+        top_k=args.top_k,
     )
 
     print(output)
