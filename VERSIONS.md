@@ -224,6 +224,7 @@ are registered in `src/tokenizers/factory.py`.
 | `char_v0` | One token per character | `src/tokenizers/v0/tokenizer_v0.py` |
 | `bpe_v1` | Byte-level BPE trained on our corpus | `src/tokenizers/v1/tokenizer_v1.py` |
 | `wordpiece_v2` | WordPiece trained on our corpus | `src/tokenizers/v2/tokenizer_v2.py` |
+| `unigram_v3` | Unigram (SentencePiece-style) trained on our corpus | `src/tokenizers/v3/tokenizer_v3.py` |
 
 **WordPiece (`wordpiece_v2`)** is the tokenizer BERT uses. It builds its
 vocabulary like BPE, but merges the pair that most increases corpus
@@ -236,7 +237,18 @@ becomes `<UNK>`; and decoding re-joins words with single spaces, so it
 doesn't reproduce the original whitespace exactly.
 **Try it:** `configs/toy_copy_wordpiece_v2.py`.
 
-Still not implemented: Unigram/SentencePiece, and pretrained tokenizers.
+**Unigram (`unigram_v3`)** is the algorithm behind SentencePiece. BPE and
+WordPiece grow a vocabulary by merging pairs; Unigram goes the other way,
+starting from a large set of candidate substrings and repeatedly pruning
+the ones whose removal hurts corpus likelihood least. Each piece has a
+learned probability, and encoding picks the most probable segmentation
+of each word. Like SentencePiece, whitespace is an ordinary symbol
+(rewritten to `▁`), so word-initial pieces carry their own marker and
+`decode()` reproduces the input text exactly, as long as every character
+was seen in training; an unseen character becomes `<UNK>`.
+**Try it:** `configs/toy_copy_unigram_v3.py`.
+
+Still not implemented: pretrained tokenizers.
 
 ---
 
