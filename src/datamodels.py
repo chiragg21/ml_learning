@@ -64,6 +64,13 @@ class TrainingConfig:
 
     save_every_n_steps: int | None = None
 
+    # Each checkpoint stores model + optimizer state (AdamW's two
+    # momentum buffers roughly triple the raw model size), and nothing
+    # deletes old ones by default - a long run checkpointing often can
+    # balloon into gigabytes of files nobody needs once training is
+    # done. Keep only the most recent N; None keeps all of them.
+    save_total_limit: int | None = 3
+
     extra: dict[str, Any] = field(default_factory=dict)
 
 

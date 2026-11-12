@@ -513,4 +513,5 @@ class Trainer:
             scheduler=self.scheduler,
             epoch=epoch,
             global_step=self.global_step,
+            keep_last_n=self.config.training.save_total_limit,
         )

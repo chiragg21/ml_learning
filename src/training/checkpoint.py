@@ -18,6 +18,7 @@ class CheckpointManager:
         epoch: int = 0,
         global_step: int = 0,
         metrics: dict[str, float] | None = None,
+        keep_last_n: int | None = None,
     ) -> None:
 
         path = Path(path)
@@ -51,6 +52,26 @@ class CheckpointManager:
             checkpoint,
             path,
         )
+
+        if keep_last_n is not None:
+            self._prune(path.parent, keep_last_n)
+
+    @staticmethod
+    def _prune(checkpoint_dir: Path, keep_last_n: int) -> None:
+        """
+        Deletes all but the keep_last_n most recently modified
+        checkpoint files in checkpoint_dir. Each checkpoint stores
+        model + optimizer state, so left unchecked a long run's
+        checkpoints directory grows without bound.
+        """
+
+        checkpoints = sorted(
+            checkpoint_dir.glob("*.pt"),
+            key=lambda checkpoint_path: checkpoint_path.stat().st_mtime,
+        )
+
+        for checkpoint_path in checkpoints[:-keep_last_n]:
+            checkpoint_path.unlink()
 
     def load(
         self,

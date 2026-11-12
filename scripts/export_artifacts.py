@@ -80,9 +80,14 @@ def main() -> None:
     if staging_dir.exists():
         shutil.rmtree(staging_dir)
 
+    # Skip checkpoints/: those hold model + optimizer state for
+    # resuming training, not for using the trained model, and each one
+    # is roughly 3x the model's size - bundling all of them turned an
+    # export into gigabytes nobody needed once training completed.
     shutil.copytree(
         experiment_dir,
         staging_dir / "experiments" / experiment_dir.name,
+        ignore=shutil.ignore_patterns("checkpoints"),
     )
 
     if MLFLOW_DB.exists():
