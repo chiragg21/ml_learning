@@ -18,6 +18,7 @@
 # Override the config/dataset without editing this file:
 #   !CONFIG=configs/toy_copy_v0.py bash bootstrap_colab.sh   # fast pipeline smoke test
 #   !CONFIG=configs/wikitext_v0.py DATASET=wikitext bash bootstrap_colab.sh
+#   !CONFIG=configs/translation_v0_scaled.py bash bootstrap_colab.sh   # 500k pairs, BPE tokenizer, d_model=384
 
 set -euo pipefail
 
@@ -40,7 +41,7 @@ fi
 # clobbering that build by only installing it if it's missing.
 python -c "import torch" 2>/dev/null || pip install -q torch
 
-pip install -q mlflow datasets
+pip install -q mlflow datasets tokenizers
 
 python -m scripts.download_data --dataset "$DATASET"
 
