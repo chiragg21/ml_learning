@@ -212,6 +212,34 @@ and `artifacts/manager.py` - shared by every model version, v0 included.
 
 ---
 
+## Tokenizers (independent of model version)
+
+Tokenizers are chosen separately from the model via `TokenizerConfig`, so
+any tokenizer below works with any model version. All share the same
+interface (`PAD/UNK/BOS/EOS` ids, `encode`, `decode`, `vocab_size`) and
+are registered in `src/tokenizers/factory.py`.
+
+| Key | What it is | File |
+|---|---|---|
+| `char_v0` | One token per character | `src/tokenizers/v0/tokenizer_v0.py` |
+| `bpe_v1` | Byte-level BPE trained on our corpus | `src/tokenizers/v1/tokenizer_v1.py` |
+| `wordpiece_v2` | WordPiece trained on our corpus | `src/tokenizers/v2/tokenizer_v2.py` |
+
+**WordPiece (`wordpiece_v2`)** is the tokenizer BERT uses. It builds its
+vocabulary like BPE, but merges the pair that most increases corpus
+likelihood instead of the most frequent pair, and at encoding time
+greedily matches the longest vocabulary entry from the left of each word.
+Continuation pieces carry a `##` prefix ("playing" -> `play`, `##ing`).
+Two differences from `bpe_v1` worth knowing: it works on unicode
+characters rather than bytes, so a character never seen in training
+becomes `<UNK>`; and decoding re-joins words with single spaces, so it
+doesn't reproduce the original whitespace exactly.
+**Try it:** `configs/toy_copy_wordpiece_v2.py`.
+
+Still not implemented: Unigram/SentencePiece, and pretrained tokenizers.
+
+---
+
 ## Future: v2 - making it fast and able to handle long sequences
 
 Not yet implemented - this is the plan. v2's theme is *efficiency*:

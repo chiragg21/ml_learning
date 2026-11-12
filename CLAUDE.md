@@ -4,9 +4,9 @@ This project implements a transformer from scratch across versions
 v0→v1→v2→v3 (see [VERSIONS.md](VERSIONS.md) for what each version is
 and what's still unimplemented - check it before starting work to see
 which version/feature is next). v0 and v1 are done, tested on real
-training runs, and pushed. v2, v3, and additional tokenizers (listed in
-VERSIONS.md / discussed in prior sessions: WordPiece, Unigram/
-SentencePiece, pretrained tokenizers) are not yet implemented.
+training runs, and pushed. WordPiece (`wordpiece_v2`) is also done. v2, v3, and the remaining
+tokenizers (Unigram/SentencePiece, pretrained tokenizers) are not yet
+implemented.
 
 ## Workflow for implementing new versions/features
 
