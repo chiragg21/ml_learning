@@ -76,10 +76,28 @@ def main() -> None:
 
     train_pairs, val_pairs, _ = DataFactory.build(config)
 
-    train_dataset = TokenizedSeq2SeqDataset(train_pairs, tokenizer)
+    # Character count isn't a safe proxy for tokenized length under
+    # every tokenizer (see TokenizedSeq2SeqDataset's docstring) - drop
+    # anything that's still too long for the model's max_seq_len after
+    # actually tokenizing it, regardless of what a data.steps filter
+    # already did on raw text.
+    max_source_len = config.model.encoder.parameters.get("max_seq_len")
+    max_target_len = config.model.decoder.parameters.get("max_seq_len")
+
+    train_dataset = TokenizedSeq2SeqDataset(
+        train_pairs,
+        tokenizer,
+        max_source_len=max_source_len,
+        max_target_len=max_target_len,
+    )
 
     validation_dataset = (
-        TokenizedSeq2SeqDataset(val_pairs, tokenizer)
+        TokenizedSeq2SeqDataset(
+            val_pairs,
+            tokenizer,
+            max_source_len=max_source_len,
+            max_target_len=max_target_len,
+        )
         if val_pairs
         else None
     )

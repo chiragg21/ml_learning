@@ -17,11 +17,16 @@ from src.datamodels import (
 # transformer "v0" architecturally (Post-Norm/LayerNorm/GELU/absolute
 # position) - only the data/tokenizer/size changed, not the architecture.
 #
-# BPE tokens cover multiple characters each, so the same MAX_SEQ_LEN
-# (measured in characters, via filter_by_length below, which runs
-# before tokenization) comfortably covers sequences that are now
-# *shorter* in token count than the old char-tokenized ones were - this
-# is a safe upper bound, not a tight one.
+# filter_by_length below is a coarse, cheap pre-filter on raw character
+# count, applied before the tokenizer even exists - it reduces how much
+# text gets tokenized/trained on, but it is NOT a correctness guarantee
+# on tokenized length: byte-level BPE's base alphabet is UTF-8 bytes, not
+# characters, so a multi-byte character (e.g. an accented French letter)
+# can occasionally tokenize into *more* tokens than its character count
+# if that byte pair wasn't merged by the trained vocabulary. The actual
+# max_seq_len guarantee comes from TokenizedSeq2SeqDataset filtering by
+# real tokenized length afterward (see scripts/train.py) - this found
+# and silently dropped 1 oversized pair out of 50,000 in testing.
 MAX_SEQ_LEN = 160
 
 CONFIG = ExperimentConfig(
@@ -85,13 +90,19 @@ CONFIG = ExperimentConfig(
     ),
     training=TrainingConfig(
         epochs=5,
-        batch_size=32,
+        # Bumped from 32: GPU memory/utilization headroom observed during
+        # a real run was nowhere near the limit at batch_size=32 (a model
+        # this size - ~26M params - was never going to be memory-bound),
+        # so a bigger batch means better GPU utilization and likely
+        # faster wall-clock training, at the cost of fewer total steps.
+        batch_size=128,
         learning_rate=3e-4,
         scheduler="linear_warmup",
-        # More total steps than translation_v0.py (25x the data) - a
-        # longer warmup is proportionally still a small fraction of training.
-        warmup_steps=1000,
-        save_every_n_steps=1000,
+        # ~389k pairs / batch_size=128 ~= 3040 steps/epoch * 5 epochs ~=
+        # 15200 total steps (down from ~60800 at batch_size=32) - keeping
+        # warmup at roughly the same ~1.6% fraction of total training.
+        warmup_steps=250,
+        save_every_n_steps=500,
     ),
     evaluation=EvaluationConfig(),
     runtime=RuntimeConfig(),
