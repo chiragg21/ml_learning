@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Type
 
 from src.tokenizers.v0.tokenizer_v0 import CharTokenizer
+from src.tokenizers.v1.tokenizer_v1 import BPETokenizerV1
 
 
 class TokenizerFactory:
@@ -16,6 +17,7 @@ class TokenizerFactory:
 
     _registry: dict[str, Type] = {
         "char_v0": CharTokenizer,
+        "bpe_v1": BPETokenizerV1,
     }
 
     @classmethod
