@@ -53,9 +53,11 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(
         description=(
-            "Bundle one experiment's model/tokenizer/config/checkpoints "
+            "Bundle one experiment's final model/tokenizer/config "
             "(plus the MLflow log database) into a single zip, ready to "
-            "download off Colab/Kaggle."
+            "download off Colab/Kaggle. Intermediate checkpoints are "
+            "excluded - see CheckpointManager's retention and this "
+            "script's own checkpoints/ exclusion."
         )
     )
 

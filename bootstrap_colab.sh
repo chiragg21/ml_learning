@@ -18,7 +18,13 @@
 # Override the config/dataset without editing this file:
 #   !CONFIG=configs/toy_copy_v0.py bash bootstrap_colab.sh   # fast pipeline smoke test
 #   !CONFIG=configs/wikitext_v0.py DATASET=wikitext bash bootstrap_colab.sh
-#   !CONFIG=configs/translation_v0_scaled.py bash bootstrap_colab.sh   # 500k pairs, BPE tokenizer, d_model=384
+#   !CONFIG=configs/translation_compare_v0.py bash bootstrap_colab.sh   # one of the v0..v3 comparison configs
+#
+# The export zip is named after the config file (e.g. translation_compare_v0.py
+# -> translation_compare_v0.zip), not a fixed "export_bundle.zip" - each of
+# the four comparison configs is expected to be trained in its own separate
+# session, so this keeps their exports distinguishable when copied somewhere
+# like Google Drive instead of overwriting each other under the same name.
 
 set -euo pipefail
 
@@ -47,16 +53,22 @@ python -m scripts.download_data --dataset "$DATASET"
 
 python -m scripts.train --config "$CONFIG"
 
+# Name the export after the config (e.g. translation_compare_v2.py ->
+# translation_compare_v2.zip) rather than a fixed name, so training
+# different versions in separate sessions never overwrites a previous
+# session's export under the same filename.
+EXPORT_NAME="$(basename "$CONFIG" .py)"
+
 # Export immediately after training, in the same script run - waiting
 # for a separate manual step here is exactly what risks losing the
 # trained model if the runtime gets disconnected/changed in between.
-python -m scripts.export_artifacts
+python -m scripts.export_artifacts --output "$EXPORT_NAME"
 
 echo ""
-echo "Zip ready at: $(pwd)/export_bundle.zip"
+echo "Zip ready at: $(pwd)/${EXPORT_NAME}.zip"
 echo "On Kaggle: it will already show up in the Output panel."
 echo "On Colab: run this in a genuine code cell (not a !-prefixed shell"
 echo "cell - files.download() only works called directly, in-kernel):"
 echo ""
 echo "  from google.colab import files"
-echo "  files.download(\"$(pwd)/export_bundle.zip\")"
+echo "  files.download(\"$(pwd)/${EXPORT_NAME}.zip\")"

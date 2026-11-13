@@ -10,6 +10,14 @@ from src.datamodels import (
     TrainingConfig,
 )
 
+# One of four configs (translation_compare_v0.py .. _v3.py) meant to be
+# trained on the *same* data/tokenizer/training budget, one version at a
+# time, in separate sessions, so the resulting metrics are a fair
+# apples-to-apples comparison of architecture alone - v1/v2/v3 should
+# keep this file's data/tokenizer/training block identical and only
+# change the model section (and whatever's new to that version's
+# config, e.g. v3's num_experts).
+#
 # Scaled-up version of translation_v0.py: more data (20k -> 500k pairs),
 # a trained byte-level BPE tokenizer instead of the char tokenizer (see
 # src/tokenizers/v1/tokenizer_v1.py), and a correspondingly larger model
@@ -87,6 +95,11 @@ CONFIG = ExperimentConfig(
                 parameters={"max_len": MAX_SEQ_LEN},
             ),
         ),
+        # OPUS-100 sentence lengths vary a lot; grouping similar lengths
+        # into the same batch means less of each batch is wasted <PAD>
+        # tokens, which eases memory pressure and speeds training -
+        # complements fp16 below rather than competing with it.
+        extra={"bucket_by_length": True},
     ),
     training=TrainingConfig(
         epochs=5,
@@ -95,6 +108,16 @@ CONFIG = ExperimentConfig(
         # this size - ~26M params - was never going to be memory-bound),
         # so a bigger batch means better GPU utilization and likely
         # faster wall-clock training, at the cost of fewer total steps.
+        #
+        # At batch_size=128 in fp32, a real run measured ~11.5GB used on
+        # a 16GB T4 - most of that is attention score matrices and other
+        # backward-pass activations, not the ~26M model weights
+        # themselves. fp16 halves activation memory (recovering headroom
+        # instead of spending it) and runs faster on the T4's fp16
+        # tensor cores, so it's the next lever, not a bigger batch_size -
+        # pushing batch_size further on top of an already-tight budget
+        # risks an OOM. Revisit batch_size only after confirming how much
+        # headroom fp16 actually frees on real hardware.
         batch_size=128,
         learning_rate=3e-4,
         scheduler="linear_warmup",
@@ -103,7 +126,13 @@ CONFIG = ExperimentConfig(
         # warmup at roughly the same ~1.6% fraction of total training.
         warmup_steps=250,
         save_every_n_steps=500,
+        mixed_precision=True,
+        precision="fp16",
     ),
     evaluation=EvaluationConfig(),
-    runtime=RuntimeConfig(),
+    runtime=RuntimeConfig(
+        num_workers=2,
+        compile_model=True,
+        extra={"prefetch_factor": 4},
+    ),
 )
