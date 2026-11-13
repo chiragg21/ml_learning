@@ -398,35 +398,89 @@ Streaming can't be combined with packing or bucketing (both need all
 lengths up front); the options live in `extra` dicts so existing
 experiment hashes don't change.
 
-## Future: v3 - scaling up and getting smarter about compute
+## v3 - scaling up and getting smarter about compute
 
-v3's theme is *doing more without doing everything, every time*:
+**Code:** `src/models/v3/` (`modules_v3.py`, `encoder_v3.py`, `decoder_v3.py`, `transformer_v3.py`), `src/generator/inference_compute.py`, `src/quantization/quantize.py`, `src/evaluation/advanced.py`
+**Try it:** `configs/toy_copy_v3.py`, `scripts/quantize.py`
 
-- **MoE (Mixture of Experts):** replace the single dense feed-forward
-  network with several "expert" FFNs, where each token is routed to
-  only a few of them instead of all of them. Lets total parameter count
-  grow much larger while the compute cost *per token* stays small -
-  this is how models like Mixtral and GPT-4 (reportedly) scale.
-- **Top-k routing:** the specific mechanism MoE needs - a learned
-  router picks the top-k experts for each token.
-- **Load balancing:** without an explicit nudge, routers tend to send
-  every token to the same few experts, wasting the rest. An auxiliary
-  loss term encourages tokens to spread out across experts evenly.
-- **Conditional computation / dynamic depth:** let "easy" tokens skip
-  some layers and "hard" tokens use the full stack, instead of every
-  token always doing the same fixed amount of work.
-- **Inference-time compute:** spending extra compute *at generation
-  time* (e.g. multiple reasoning passes, self-verification, sampling
-  many candidates and picking the best) to improve output quality
-  without growing the model itself - the idea behind "reasoning models."
-- **Quantization concepts:** compressing trained weights to lower
-  precision (int8, int4) after training, trading a little accuracy for
-  much cheaper storage/inference.
-- **Advanced evaluation:** moving past loss/perplexity/token-accuracy
-  (what `src/evaluation/evaluator.py` measures today) toward held-out
-  benchmark suites and qualitative/LLM-judged generation quality -
-  the kind of evaluation a model needs once "does it produce a lower
-  number" stops being a good enough question.
+v3's theme is *doing more without doing everything, every time*.
+`transformer_v3` extends v2 (all of v2's features keep working with it)
+and with its new options off it computes exactly what v2 does. The
+last three items below don't change the model at all - they are tools
+around it.
+
+| Piece | v2 | v3 | Why change |
+|---|---|---|---|
+| Feed-forward | One dense SwiGLU per layer | **MoE**: several expert FFNs, **top-k routing**, **load-balancing loss** | More parameters without more compute per token |
+| Depth | Every token uses every layer | **Dynamic depth**: a per-token router may skip a layer | "Easy" tokens can use less of the stack |
+| Generation | One greedy/sampled answer | **Inference-time compute**: best-of-N, majority vote, verification | Better output from more compute, same model |
+| Weights | fp32 | **Quantization**: int8/int4 weight-only | Several times smaller model |
+| Evaluation | Loss, perplexity, token accuracy | BLEU, chrF, exact match, CER, judge hook, benchmark suites, calibration | Scores what the model actually generates |
+
+**MoE and top-k routing** (`MoEFeedForward`). Each token is scored by a
+small linear router over `num_experts` experts; the `top_k` best run and
+their outputs are summed, weighted by the renormalised router
+probabilities (which is also what gives the router a gradient). Total
+parameters grow about `num_experts`-fold while per-token compute stays at
+`top_k` experts. Set `num_experts`, `top_k` and `moe_every` (convert
+every N-th layer; default every layer) in the encoder/decoder
+`parameters`. Honest limitations: it is *dropless* (no per-expert capacity
+limit) and experts run in a Python loop over their tokens - correct and
+simple, not the fused grouped matmul a real system uses.
+
+**Load balancing.** Left alone, routers collapse onto a few favourite
+experts. The Switch-Transformer auxiliary loss `E * sum_e f_e * P_e`
+(`f_e`: share of routing slots sent to expert `e`; `P_e`: mean router
+probability for `e`) equals 1 when balanced and grows when collapsed; its
+gradient flows through `P_e`. Padding tokens are excluded.
+`moe_aux_weight` scales it; the model returns the weighted sum of all
+auxiliary losses as `output.aux_loss` and `Trainer` adds it to the
+cross-entropy. `model.set_usage_tracking(True)` + `routing_usage()` show
+how tokens were actually routed.
+
+**Conditional computation / dynamic depth** (`dynamic_depth: True`,
+`depth_capacity`). A `DepthRouter` per layer decides per token whether
+the layer's update is applied (`sigmoid(score) > 0.5`); a skipping token
+keeps its residual stream unchanged. A per-token threshold, rather than
+"top 50% of the sequence" as in Mixture-of-Depths, is deliberate: it
+needs no look at future tokens, so training and KV-cached generation
+agree. Gradients use a straight-through estimator, and a budget loss
+pulls the average usage toward `depth_capacity`. The router starts open
+(almost every token uses every layer). Honest limitation: skipped
+tokens' updates are *masked out*, not avoided - attention and the FFN
+still run on the full batch - so this trains and demonstrates the
+routing but does not yet save compute; that needs gathering selected
+tokens into a smaller tensor, which interacts with attention, RoPE
+positions and the KV cache.
+
+**Inference-time compute** (`src/generator/inference_compute.py`).
+`best_of_n` samples N candidates and keeps the best by the model's own
+length-normalised log-probability, or by any `verifier(source_ids,
+candidate_ids) -> score` you supply; `majority_vote` returns the answer
+most candidates agree on (self-consistency); `verify_and_vote` filters by
+a verifier first. Quality improves with N only as far as the scorer
+prefers good outputs, and cost grows linearly with N. Works with any
+model version through `Generator`.
+
+**Quantization** (`quantize_model` in `src/quantization/quantize.py`).
+Post-training, weight-only, symmetric, per-group: each group of
+`group_size` weights in a row shares a float scale and is stored as int8
+(4x smaller) or int4 (packed two per byte, ~8x smaller before scales).
+Weights are dequantized on the fly, so activations stay float - this
+saves storage, not arithmetic. The tied embedding/output matrix and the
+small routers are kept in float. Int4 usually wants `group_size` 32-128.
+`python -m scripts.quantize --config ... --bits 8` evaluates a trained
+experiment before and after.
+
+**Advanced evaluation** (`src/evaluation/advanced.py`).
+`evaluate_generation` generates for held-out pairs and scores exact
+match, character error rate, BLEU, chrF and length ratio, plus an
+optional `judge(source, reference, hypothesis) -> [0, 1]` callable for
+qualitative scoring (no judge model is bundled - plug in your own);
+`BenchmarkSuite`/`run_benchmarks` score named held-out sets separately;
+`calibration_error` measures whether the model's confidence matches its
+accuracy. BLEU/chrF reward surface overlap, not meaning, so treat them as
+proxies.
 
 ---
 

@@ -579,6 +579,13 @@ class Trainer:
                 ignore_index=pad_token_id,
             )
 
+            # v3 models report extra training losses (MoE load balancing,
+            # depth budget); earlier versions have no aux_loss.
+            aux_loss = getattr(output, "aux_loss", None)
+
+            if aux_loss is not None:
+                loss = loss + aux_loss
+
         return loss
 
     def _save_checkpoint(self, epoch: int) -> None:

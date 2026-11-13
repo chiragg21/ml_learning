@@ -85,6 +85,28 @@ class TransformerV2(BaseTransformer):
         self.encoder.gradient_checkpointing = enabled
         self.decoder.gradient_checkpointing = enabled
 
+    @staticmethod
+    def _segment_masks(source_segment_ids, target_segment_ids):
+        """
+        Packed rows: an example may only attend within its own segment,
+        in the encoder, the decoder and across them. True = blocked, the
+        same convention as every other mask here. All None when unpacked.
+        """
+
+        if source_segment_ids is None:
+            return None, None, None
+
+        if target_segment_ids is None:
+            raise ValueError(
+                "source_segment_ids and target_segment_ids go together"
+            )
+
+        return (
+            source_segment_ids[:, :, None] != source_segment_ids[:, None, :],
+            target_segment_ids[:, :, None] != target_segment_ids[:, None, :],
+            target_segment_ids[:, :, None] != source_segment_ids[:, None, :],
+        )
+
     # ==================================================
     # Training / teacher-forced forward
     # ==================================================
@@ -99,34 +121,9 @@ class TransformerV2(BaseTransformer):
             target_segment_ids: torch.Tensor | None = None,
         ):
 
-            # Packed rows: an example may only attend within its own
-            # segment, in the encoder, the decoder and across them. True
-            # = blocked, the same convention as every other mask here.
-            source_segment_mask = None
-            target_segment_mask = None
-            cross_segment_mask = None
-
-            if source_segment_ids is not None:
-
-                if target_segment_ids is None:
-                    raise ValueError(
-                        "source_segment_ids and target_segment_ids go together"
-                    )
-
-                source_segment_mask = (
-                    source_segment_ids[:, :, None]
-                    != source_segment_ids[:, None, :]
-                )
-
-                target_segment_mask = (
-                    target_segment_ids[:, :, None]
-                    != target_segment_ids[:, None, :]
-                )
-
-                cross_segment_mask = (
-                    target_segment_ids[:, :, None]
-                    != source_segment_ids[:, None, :]
-                )
+            source_segment_mask, target_segment_mask, cross_segment_mask = (
+                self._segment_masks(source_segment_ids, target_segment_ids)
+            )
 
             encoder_output = self.encoder(
                  source_ids,

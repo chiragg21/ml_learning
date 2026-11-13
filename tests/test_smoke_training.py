@@ -28,6 +28,7 @@ from tokenizers.trainers import BpeTrainer
 
 from artifacts.manager import ArtifactManager, ExperimentManager
 from scripts.train import build_tokenizer, load_config
+from scripts.quantize import compare_quantization
 from src.data.factory import DataFactory
 from src.data.seq2seq import build_datasets
 from src.training.trainer import Trainer
@@ -200,3 +201,53 @@ def test_toy_copy_compiled_v2_trains_end_to_end(tmp_path):
     metrics = _run_smoke_training("", tmp_path, config=config)
 
     assert math.isfinite(metrics["train_loss"])
+
+
+def test_toy_copy_v3_trains_end_to_end(tmp_path):
+
+    # MoE + dynamic depth; the loss includes their auxiliary terms
+    metrics = _run_smoke_training("configs/toy_copy_v3.py", tmp_path)
+
+    assert math.isfinite(metrics["train_loss"])
+    assert math.isfinite(metrics["val_loss"])
+
+
+def test_toy_copy_v3_trains_with_the_v2_efficiency_features(tmp_path):
+
+    config = load_config("configs/toy_copy_v3.py")
+
+    config = replace(
+        config,
+        data=replace(config.data, extra={"pack_sequences": True}),
+        training=replace(
+            config.training,
+            epochs=2,
+            mixed_precision=True,
+            precision="bf16",
+            gradient_checkpointing=True,
+        ),
+    )
+
+    metrics = _run_smoke_training("", tmp_path, config=config)
+
+    assert math.isfinite(metrics["train_loss"])
+
+
+def test_trained_v3_model_quantizes_and_evaluates(tmp_path):
+
+    config = load_config("configs/toy_copy_v3.py")
+    config = replace(config, training=replace(config.training, epochs=1))
+
+    _run_smoke_training("", tmp_path, config=config)
+
+    experiment = ExperimentManager(
+        config,
+        artifact_manager=ArtifactManager(root_dir=tmp_path / "artifacts"),
+    )
+
+    results = compare_quantization(config, bits=8, experiment_manager=experiment)
+
+    assert results["quantized_layers"] > 0
+    assert results["size_ratio"] > 1.3
+    assert math.isfinite(results["quantized_loss"])
+    assert abs(results["quantized_loss"] - results["float_loss"]) < 0.5

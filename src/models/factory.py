@@ -21,6 +21,12 @@ from src.models.v2.datamodels_v2 import (
     TransformerConfigV2,
 )
 from src.models.v2.transformer_v2 import TransformerV2
+from src.models.v3.datamodels_v3 import (
+    DecoderConfigV3,
+    EncoderConfigV3,
+    TransformerConfigV3,
+)
+from src.models.v3.transformer_v3 import TransformerV3
 
 
 def _build_transformer_v0_config(config, tokenizer=None) -> TransformerConfigV0:
@@ -68,6 +74,21 @@ def _build_transformer_v2_config(config, tokenizer=None) -> TransformerConfigV2:
     )
 
 
+def _build_transformer_v3_config(config, tokenizer=None) -> TransformerConfigV3:
+
+    encoder_params = dict(config.model.encoder.parameters)
+    decoder_params = dict(config.model.decoder.parameters)
+
+    if tokenizer is not None:
+        encoder_params.setdefault("vocab_size", tokenizer.vocab_size)
+        decoder_params.setdefault("target_vocab_size", tokenizer.vocab_size)
+
+    return TransformerConfigV3(
+        encoder_config=EncoderConfigV3(**encoder_params),
+        decoder_config=DecoderConfigV3(**decoder_params),
+    )
+
+
 class ModelFactory:
     """
     Builds a registered transformer version from a generic ExperimentConfig.
@@ -82,6 +103,7 @@ class ModelFactory:
         "transformer_v0": (TransformerV0, _build_transformer_v0_config),
         "transformer_v1": (TransformerV1, _build_transformer_v1_config),
         "transformer_v2": (TransformerV2, _build_transformer_v2_config),
+        "transformer_v3": (TransformerV3, _build_transformer_v3_config),
     }
 
     @classmethod
