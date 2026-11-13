@@ -96,10 +96,19 @@ class Trainer:
 
         # Workers load the next batches while the model computes on the
         # current one; prefetch_factor sets how many each keeps ready.
+        # multiprocessing_context="fork" pins the worker start method:
+        # Python 3.14 switched POSIX's default from fork to forkserver,
+        # which pickles every worker argument (breaking on anything not
+        # picklable) and passes file descriptors through a control
+        # channel with its own low limit - fork avoids both by just
+        # copying the parent process's memory directly. Workers never
+        # touch CUDA themselves, so forking after the parent's CUDA
+        # init (if any) is safe here.
         worker_options = (
             {
                 "prefetch_factor": config.runtime.extra.get("prefetch_factor", 2),
                 "persistent_workers": persistent_workers,
+                "multiprocessing_context": "fork",
             }
             if persistent_workers
             else {}

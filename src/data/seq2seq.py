@@ -345,24 +345,35 @@ class BucketBatchSampler(Sampler):
         return -(-len(self.lengths) // self.batch_size)
 
 
-def make_collate_fn(pad_token_id: int):
+class Seq2SeqCollator:
     """
-    Returns a collate_fn that right-pads variable-length source/target
-    sequences within a batch, keyed to the given tokenizer's pad token id.
+    Right-pads variable-length source/target sequences within a batch,
+    keyed to the given tokenizer's pad token id.
+
+    A plain class rather than make_collate_fn's old closure-returning
+    function: DataLoader(num_workers>0) ships the collate_fn to each
+    worker process, and a nested function can't be pickled for that -
+    Python 3.14 made this fail loudly by switching POSIX's default
+    multiprocessing start method from fork (no pickling needed, just
+    inherits memory) to forkserver (pickles everything), where the old
+    closure raised PicklingError on every multi-worker run.
     """
 
-    def collate(batch):
+    def __init__(self, pad_token_id: int):
+        self.pad_token_id = pad_token_id
+
+    def __call__(self, batch):
 
         source_ids = pad_sequence(
             [item["source_ids"] for item in batch],
             batch_first=True,
-            padding_value=pad_token_id,
+            padding_value=self.pad_token_id,
         )
 
         target_ids = pad_sequence(
             [item["target_ids"] for item in batch],
             batch_first=True,
-            padding_value=pad_token_id,
+            padding_value=self.pad_token_id,
         )
 
         collated = {
@@ -383,7 +394,9 @@ def make_collate_fn(pad_token_id: int):
 
         return collated
 
-    return collate
+
+def make_collate_fn(pad_token_id: int) -> Seq2SeqCollator:
+    return Seq2SeqCollator(pad_token_id)
 
 
 def build_datasets(config, tokenizer, train_pairs, val_pairs):
