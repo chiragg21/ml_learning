@@ -379,6 +379,15 @@ class Trainer:
 
         final_metrics: dict[str, float] = {}
 
+        # Tracks the best validation loss seen so far so the exported
+        # model.pt is whichever epoch actually generalized best, not
+        # just whatever the last epoch happened to end on - an earlier
+        # epoch can validate better than a later one (e.g. the later
+        # one starting to overfit), and saving unconditionally at the
+        # end would silently ship the worse one.
+        best_val_loss = float("inf")
+        best_metrics: dict[str, float] = {}
+
         print(
             f"Starting training: {training_config.epochs} epochs, "
             f"{len(self.train_loader)} batches/epoch, device={self.device}",
@@ -426,9 +435,32 @@ class Trainer:
                         step=self.global_step,
                     )
 
-        self.model.save_model(
-            self.experiment.model_path
-        )
+                if validation_metrics["loss"] < best_val_loss:
+
+                    best_val_loss = validation_metrics["loss"]
+                    best_metrics = final_metrics
+
+                    self.model.save_model(
+                        self.experiment.model_path
+                    )
+
+                    print(
+                        f"[epoch {epoch + 1}/{training_config.epochs}] "
+                        f"new best val_loss={best_val_loss:.4f} - saved as model.pt",
+                        flush=True,
+                    )
+
+        # No validation set to pick a "best" epoch by - fall back to
+        # whatever the last epoch produced, the only signal available.
+        if self.validation_loader is None:
+
+            self.model.save_model(
+                self.experiment.model_path
+            )
+
+        else:
+
+            final_metrics = best_metrics
 
         self.experiment.mark_complete(
             global_step=self.global_step,
