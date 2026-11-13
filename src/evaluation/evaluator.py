@@ -13,11 +13,15 @@ class Evaluator:
         model,
         device: str | torch.device = "cpu",
         pad_token_id: int = 0,
+        mixed_precision: bool = False,
+        amp_dtype: torch.dtype = torch.bfloat16,
     ):
 
         self.model = model
         self.device = torch.device(device)
         self.pad_token_id = pad_token_id
+        self.mixed_precision = mixed_precision
+        self.amp_dtype = amp_dtype
 
     @torch.no_grad()
     def evaluate(
@@ -54,14 +58,21 @@ class Evaluator:
                 decoder_input_ids == self.pad_token_id
             )
 
-            output = self.model(
-                source_ids=source_ids,
-                target_ids=decoder_input_ids,
-                source_key_padding_mask=source_key_padding_mask,
-                target_key_padding_mask=target_key_padding_mask,
-            )
+            with torch.autocast(
+                device_type=self.device.type,
+                dtype=self.amp_dtype,
+                enabled=self.mixed_precision,
+            ):
 
-            logits = output.logits
+                output = self.model(
+                    source_ids=source_ids,
+                    target_ids=decoder_input_ids,
+                    source_key_padding_mask=source_key_padding_mask,
+                    target_key_padding_mask=target_key_padding_mask,
+                )
+
+            # Loss in fp32 whatever the forward pass ran in.
+            logits = output.logits.float()
 
             vocab_size = logits.size(-1)
 

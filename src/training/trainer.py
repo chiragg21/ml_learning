@@ -5,10 +5,10 @@ import random
 
 import torch
 from torch import nn
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, IterableDataset
 
 from artifacts.manager import ExperimentManager
-from src.data.seq2seq import make_collate_fn
+from src.data.seq2seq import BucketBatchSampler, make_collate_fn
 from src.evaluation.evaluator import Evaluator
 from src.models.factory import ModelFactory
 from src.training.checkpoint import CheckpointManager
@@ -64,6 +64,16 @@ class Trainer:
             self.device
         )
 
+        if config.training.gradient_checkpointing:
+
+            if not hasattr(self.model, "set_gradient_checkpointing"):
+                raise ValueError(
+                    "training.gradient_checkpointing needs a model with "
+                    "set_gradient_checkpointing (transformer_v2)."
+                )
+
+            self.model.set_gradient_checkpointing(True)
+
         if config.runtime.compile_model:
 
             self.model = torch.compile(
@@ -84,14 +94,50 @@ class Trainer:
 
         persistent_workers = config.runtime.num_workers > 0
 
+        # Workers load the next batches while the model computes on the
+        # current one; prefetch_factor sets how many each keeps ready.
+        worker_options = (
+            {
+                "prefetch_factor": config.runtime.extra.get("prefetch_factor", 2),
+                "persistent_workers": persistent_workers,
+            }
+            if persistent_workers
+            else {}
+        )
+
+        # A stream can't be shuffled or length-bucketed by index; it
+        # shuffles itself (see StreamingSeq2SeqDataset).
+        is_stream = isinstance(train_dataset, IterableDataset)
+
+        if config.data.extra.get("bucket_by_length"):
+
+            if is_stream:
+                raise ValueError(
+                    "data.extra: bucket_by_length can't be used with streaming."
+                )
+
+            sampler_options = {
+                "batch_sampler": BucketBatchSampler(
+                    train_dataset.lengths,
+                    config.training.batch_size,
+                    seed=config.runtime.seed,
+                ),
+            }
+
+        else:
+
+            sampler_options = {
+                "batch_size": config.training.batch_size,
+                "shuffle": not is_stream,
+            }
+
         self.train_loader = DataLoader(
             train_dataset,
-            batch_size=config.training.batch_size,
-            shuffle=True,
             num_workers=config.runtime.num_workers,
             collate_fn=collate_fn,
             pin_memory=pin_memory,
-            persistent_workers=persistent_workers,
+            **sampler_options,
+            **worker_options,
         )
 
         self.validation_loader = None
@@ -105,7 +151,7 @@ class Trainer:
                 num_workers=config.runtime.num_workers,
                 collate_fn=collate_fn,
                 pin_memory=pin_memory,
-                persistent_workers=persistent_workers,
+                **worker_options,
             )
 
         # =============================================
@@ -122,12 +168,6 @@ class Trainer:
 
         self.checkpoint_manager = (
             CheckpointManager()
-        )
-
-        self.evaluator = Evaluator(
-            model=self.model,
-            device=self.device,
-            pad_token_id=tokenizer.pad_token_id,
         )
 
         # =============================================
@@ -158,6 +198,14 @@ class Trainer:
                 self.mixed_precision
                 and self.amp_dtype == torch.float16
             ),
+        )
+
+        self.evaluator = Evaluator(
+            model=self.model,
+            device=self.device,
+            pad_token_id=tokenizer.pad_token_id,
+            mixed_precision=self.mixed_precision,
+            amp_dtype=self.amp_dtype,
         )
 
         self.global_step = 0
@@ -463,8 +511,17 @@ class Trainer:
 
         pad_token_id = self.tokenizer.pad_token_id
 
-        source_ids = batch["source_ids"].to(self.device)
-        target_ids = batch["target_ids"].to(self.device)
+        # non_blocking only overlaps the copy with compute when the
+        # source is pinned memory, which the loaders do for CUDA.
+        non_blocking = self.device.type == "cuda"
+
+        batch = {
+            key: value.to(self.device, non_blocking=non_blocking)
+            for key, value in batch.items()
+        }
+
+        source_ids = batch["source_ids"]
+        target_ids = batch["target_ids"]
 
         # Teacher forcing: decoder sees all but the last target token,
         # and is scored against all but the first (the shifted labels).
@@ -479,6 +536,27 @@ class Trainer:
             decoder_input_ids == pad_token_id
         )
 
+        # Packed rows (see PackedSeq2SeqDataset) add segment ids so
+        # examples sharing a row can't attend to each other.
+        segment_kwargs = {}
+
+        if "source_segment_ids" in batch:
+
+            target_segment_ids = batch["target_segment_ids"]
+
+            segment_kwargs = {
+                "source_segment_ids": batch["source_segment_ids"],
+                "target_segment_ids": target_segment_ids[:, :-1],
+            }
+
+            # Where the label belongs to the next example, the input's
+            # "next token" is that example's <BOS> - not a prediction
+            # worth learning.
+            labels = labels.masked_fill(
+                target_segment_ids[:, :-1] != target_segment_ids[:, 1:],
+                pad_token_id,
+            )
+
         with torch.autocast(
             device_type=self.device.type,
             dtype=self.amp_dtype,
@@ -490,6 +568,7 @@ class Trainer:
                 target_ids=decoder_input_ids,
                 source_key_padding_mask=source_key_padding_mask,
                 target_key_padding_mask=target_key_padding_mask,
+                **segment_kwargs,
             )
 
             vocab_size = output.logits.size(-1)

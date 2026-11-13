@@ -20,6 +20,7 @@ class Generator(LoadedExperiment):
         temperature: float = 1.0,
         do_sample: bool = False,
         top_k: int | None = None,
+        use_cache: bool = True,
     ) -> torch.Tensor:
 
         source_ids = source_ids.to(
@@ -43,16 +44,40 @@ class Generator(LoadedExperiment):
             device=self.device,
         )
 
+        # Models with a KV cache (transformer_v2) encode the source once
+        # and feed the decoder only the newest token each step; others
+        # re-run everything on the whole prefix.
+        cached = use_cache and hasattr(self.model, "init_cache")
+
+        if cached:
+            memory = self.model.encode(
+                source_ids,
+                source_key_padding_mask,
+            )
+            cache = self.model.init_cache()
+
         for _ in range(max_new_tokens):
 
-            output = self.model(
-                source_ids=source_ids,
-                target_ids=target_ids,
-                source_key_padding_mask=source_key_padding_mask,
-            )
+            if cached:
+
+                # first step feeds <BOS>; later ones only the new token
+                logits = self.model.decode_step(
+                    target_ids[:, -1:],
+                    memory,
+                    cache,
+                    memory_key_padding_mask=source_key_padding_mask,
+                )
+
+            else:
+
+                logits = self.model(
+                    source_ids=source_ids,
+                    target_ids=target_ids,
+                    source_key_padding_mask=source_key_padding_mask,
+                ).logits
 
             next_token_logits = (
-                output.logits[:, -1, :]
+                logits[:, -1, :]
                 / temperature
             )
 
@@ -119,6 +144,7 @@ class Generator(LoadedExperiment):
         temperature: float = 1.0,
         do_sample: bool = False,
         top_k: int | None = None,
+        use_cache: bool = True,
     ) -> str:
 
         source_ids = torch.tensor(
@@ -132,6 +158,7 @@ class Generator(LoadedExperiment):
             temperature=temperature,
             do_sample=do_sample,
             top_k=top_k,
+            use_cache=use_cache,
         )
 
         return self.tokenizer.decode(target_ids[0])

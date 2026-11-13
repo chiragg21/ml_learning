@@ -4,6 +4,7 @@ from ..v1.modules_v1 import RMSNorm, RotaryEmbedding, SwiGLUFeedForward
 from .modules_v2 import GroupedQueryAttentionV2
 import torch
 import torch.nn as nn
+from torch.utils.checkpoint import checkpoint
 
 """ Encoder Layer (v2: v1's layer with Grouped-Query Attention)
 
@@ -99,6 +100,7 @@ class EncoderLayerV2(BaseEncoderLayer):
             dropout_param=config.dropout_param,
             use_rope=True,
             window_size=config.window_size,
+            banded=config.banded,
         )
 
         self.ffn = SwiGLUFeedForward(
@@ -114,7 +116,7 @@ class EncoderLayerV2(BaseEncoderLayer):
 
         self.rope = rope
 
-    def forward(self, x, key_padding_mask=None):
+    def forward(self, x, key_padding_mask=None, segment_mask=None):
 
         normed = self.norm1(x)
 
@@ -123,6 +125,7 @@ class EncoderLayerV2(BaseEncoderLayer):
             normed,
             rope=self.rope,
             key_padding_mask=key_padding_mask,
+            segment_mask=segment_mask,
         )
 
         x = x + self.dropout(attention_output)
@@ -176,6 +179,8 @@ class EncoderV2(BaseEncoder):
         self.num_heads = config.num_heads
         self.num_kv_heads = config.num_kv_heads
         self.window_size = config.window_size
+        self.banded = config.banded
+        self.gradient_checkpointing = False
         self.d_ff = config.d_ff
         self.num_layers = config.num_layers
         self.dropout_param = config.dropout_param
@@ -205,6 +210,7 @@ class EncoderV2(BaseEncoder):
                     num_heads=self.num_heads,
                     num_kv_heads=self.num_kv_heads,
                     window_size=self.window_size,
+                    banded=self.banded,
                     d_ff=self.d_ff,
                     dropout_param=self.dropout_param,
                     rope_theta=config.rope_theta,
@@ -220,6 +226,7 @@ class EncoderV2(BaseEncoder):
             self,
             tokens,
             key_padding_mask=None,
+            segment_mask=None,
         ):
 
         batch_size, seq_len = tokens.shape
@@ -237,9 +244,23 @@ class EncoderV2(BaseEncoder):
         x = self.dropout(x)
 
         for layer in self.layers:
+
+            # Gradient checkpointing: drop this layer's activations and
+            # recompute them during backward, trading compute for memory.
+            if self.gradient_checkpointing and self.training:
+                x = checkpoint(
+                    layer,
+                    x,
+                    key_padding_mask,
+                    segment_mask,
+                    use_reentrant=False,
+                )
+                continue
+
             x = layer(
                 x,
                 key_padding_mask=key_padding_mask,
+                segment_mask=segment_mask,
             )
 
         return self.final_norm(x)

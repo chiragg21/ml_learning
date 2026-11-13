@@ -7,7 +7,7 @@ from pathlib import Path
 
 from artifacts.manager import ExperimentManager
 from src.data.factory import DataFactory
-from src.data.seq2seq import TokenizedSeq2SeqDataset
+from src.data.seq2seq import build_datasets
 from src.tokenizers.factory import TokenizerFactory
 from src.tracking.mlflowlogger import MLflowLogger
 from src.tracking.system import get_environment_info
@@ -76,30 +76,14 @@ def main() -> None:
 
     train_pairs, val_pairs, _ = DataFactory.build(config)
 
-    # Character count isn't a safe proxy for tokenized length under
-    # every tokenizer (see TokenizedSeq2SeqDataset's docstring) - drop
-    # anything that's still too long for the model's max_seq_len after
-    # actually tokenizing it, regardless of what a data.steps filter
-    # already did on raw text.
-    max_source_len = config.model.encoder.parameters.get("max_seq_len")
-    max_target_len = config.model.decoder.parameters.get("max_seq_len")
-
-    train_dataset = TokenizedSeq2SeqDataset(
-        train_pairs,
+    # Tokenized-length filtering, packing and streaming all live in
+    # build_datasets (see TokenizedSeq2SeqDataset's docstring for why
+    # length is checked after tokenizing).
+    train_dataset, validation_dataset = build_datasets(
+        config,
         tokenizer,
-        max_source_len=max_source_len,
-        max_target_len=max_target_len,
-    )
-
-    validation_dataset = (
-        TokenizedSeq2SeqDataset(
-            val_pairs,
-            tokenizer,
-            max_source_len=max_source_len,
-            max_target_len=max_target_len,
-        )
-        if val_pairs
-        else None
+        train_pairs,
+        val_pairs,
     )
 
     setup_mlflow(experiment_name=config.data.name)

@@ -15,6 +15,11 @@ class TransformerV2(BaseTransformer):
         layer (modules_v2.py), controlled by num_kv_heads in the
         encoder/decoder config. num_kv_heads=None (or == num_heads)
         reproduces v1's attention exactly.
+      - optional local attention (window_size), computed over just the
+        band with banded=True
+      - a KV cache for generation (init_cache/encode/decode_step)
+      - packed-sequence training (source/target_segment_ids)
+      - gradient checkpointing (set_gradient_checkpointing)
 
     The forward() signature is intentionally identical to TransformerV0's
     - same kwargs, same TransformerOutput return type - so nothing in
@@ -71,17 +76,62 @@ class TransformerV2(BaseTransformer):
         if isinstance(module, nn.Linear) and module.bias is not None:
             nn.init.zeros_(module.bias)
 
+    # ==================================================
+    # Memory-saving switches
+    # ==================================================
+
+    def set_gradient_checkpointing(self, enabled: bool) -> None:
+
+        self.encoder.gradient_checkpointing = enabled
+        self.decoder.gradient_checkpointing = enabled
+
+    # ==================================================
+    # Training / teacher-forced forward
+    # ==================================================
+
     def forward(
             self,
             source_ids: torch.Tensor,
             target_ids: torch.Tensor,
             source_key_padding_mask: torch.Tensor | None = None,
             target_key_padding_mask: torch.Tensor | None = None,
+            source_segment_ids: torch.Tensor | None = None,
+            target_segment_ids: torch.Tensor | None = None,
         ):
+
+            # Packed rows: an example may only attend within its own
+            # segment, in the encoder, the decoder and across them. True
+            # = blocked, the same convention as every other mask here.
+            source_segment_mask = None
+            target_segment_mask = None
+            cross_segment_mask = None
+
+            if source_segment_ids is not None:
+
+                if target_segment_ids is None:
+                    raise ValueError(
+                        "source_segment_ids and target_segment_ids go together"
+                    )
+
+                source_segment_mask = (
+                    source_segment_ids[:, :, None]
+                    != source_segment_ids[:, None, :]
+                )
+
+                target_segment_mask = (
+                    target_segment_ids[:, :, None]
+                    != target_segment_ids[:, None, :]
+                )
+
+                cross_segment_mask = (
+                    target_segment_ids[:, :, None]
+                    != source_segment_ids[:, None, :]
+                )
 
             encoder_output = self.encoder(
                  source_ids,
                  key_padding_mask=source_key_padding_mask,
+                 segment_mask=source_segment_mask,
             )
 
             decoder_output = self.decoder(
@@ -89,6 +139,8 @@ class TransformerV2(BaseTransformer):
                  memory=encoder_output,
                  tgt_key_padding_mask=target_key_padding_mask,
                  memory_key_padding_mask=source_key_padding_mask,
+                 self_segment_mask=target_segment_mask,
+                 cross_segment_mask=cross_segment_mask,
             )
 
             logits = self.llm_head(decoder_output)
@@ -96,3 +148,48 @@ class TransformerV2(BaseTransformer):
             return TransformerOutput(
                  logits=logits
             )
+
+    # ==================================================
+    # Incremental decoding (KV cache)
+    # ==================================================
+
+    def init_cache(self) -> list[dict]:
+        """One {"self", "cross"} pair of empty caches per decoder layer."""
+
+        return [
+            {"self": {}, "cross": {}}
+            for _ in self.decoder.layers
+        ]
+
+    def encode(
+            self,
+            source_ids: torch.Tensor,
+            source_key_padding_mask: torch.Tensor | None = None,
+        ) -> torch.Tensor:
+
+            return self.encoder(
+                source_ids,
+                key_padding_mask=source_key_padding_mask,
+            )
+
+    def decode_step(
+            self,
+            new_target_ids: torch.Tensor,
+            memory: torch.Tensor,
+            cache: list[dict],
+            memory_key_padding_mask: torch.Tensor | None = None,
+        ) -> torch.Tensor:
+            """
+            Logits for the new tokens only, (B, new, V). Feeding the
+            tokens one at a time through this reproduces forward()'s
+            logits for the whole sequence, without recomputing the prefix.
+            """
+
+            decoder_output = self.decoder(
+                target_ids=new_target_ids,
+                memory=memory,
+                memory_key_padding_mask=memory_key_padding_mask,
+                cache=cache,
+            )
+
+            return self.llm_head(decoder_output)

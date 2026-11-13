@@ -15,7 +15,10 @@ version-by-version workflow this supports.
 from __future__ import annotations
 
 import math
+import shutil
 from dataclasses import replace
+
+import pytest
 
 from tokenizers import Tokenizer
 from tokenizers.decoders import ByteLevel as ByteLevelDecoder
@@ -26,7 +29,7 @@ from tokenizers.trainers import BpeTrainer
 from artifacts.manager import ArtifactManager, ExperimentManager
 from scripts.train import build_tokenizer, load_config
 from src.data.factory import DataFactory
-from src.data.seq2seq import TokenizedSeq2SeqDataset
+from src.data.seq2seq import build_datasets
 from src.training.trainer import Trainer
 
 
@@ -41,25 +44,11 @@ def _run_smoke_training(config_path: str, tmp_path, config=None) -> dict:
 
     train_pairs, val_pairs, _ = DataFactory.build(config)
 
-    max_source_len = config.model.encoder.parameters.get("max_seq_len")
-    max_target_len = config.model.decoder.parameters.get("max_seq_len")
-
-    train_dataset = TokenizedSeq2SeqDataset(
-        train_pairs,
+    train_dataset, validation_dataset = build_datasets(
+        config,
         tokenizer,
-        max_source_len=max_source_len,
-        max_target_len=max_target_len,
-    )
-
-    validation_dataset = (
-        TokenizedSeq2SeqDataset(
-            val_pairs,
-            tokenizer,
-            max_source_len=max_source_len,
-            max_target_len=max_target_len,
-        )
-        if val_pairs
-        else None
+        train_pairs,
+        val_pairs,
     )
 
     trainer = Trainer(
@@ -138,6 +127,74 @@ def test_toy_copy_pretrained_v4_trains_end_to_end(tmp_path):
     config = replace(
         config,
         tokenizer=replace(config.tokenizer, parameters={"source": str(source)}),
+    )
+
+    metrics = _run_smoke_training("", tmp_path, config=config)
+
+    assert math.isfinite(metrics["train_loss"])
+
+
+def test_toy_copy_efficient_v2_trains_end_to_end(tmp_path):
+
+    # banded attention + packing + bf16 + gradient checkpointing, all at once
+    metrics = _run_smoke_training("configs/toy_copy_efficient_v2.py", tmp_path)
+
+    assert math.isfinite(metrics["train_loss"])
+    assert math.isfinite(metrics["val_loss"])
+
+
+def _efficient_variant(**data_extra):
+
+    config = load_config("configs/toy_copy_efficient_v2.py")
+
+    return replace(
+        config,
+        data=replace(config.data, extra=data_extra),
+        training=replace(config.training, epochs=2),
+    )
+
+
+def test_toy_copy_streaming_trains_end_to_end(tmp_path):
+
+    config = _efficient_variant(streaming=True, shuffle_buffer=50)
+
+    metrics = _run_smoke_training("", tmp_path, config=config)
+
+    assert math.isfinite(metrics["train_loss"])
+
+
+def test_toy_copy_streaming_with_workers_trains_end_to_end(tmp_path):
+
+    config = _efficient_variant(streaming=True, shuffle_buffer=50)
+
+    config = replace(
+        config,
+        runtime=replace(config.runtime, num_workers=2, extra={"prefetch_factor": 4}),
+    )
+
+    metrics = _run_smoke_training("", tmp_path, config=config)
+
+    assert math.isfinite(metrics["train_loss"])
+
+
+def test_toy_copy_length_bucketing_trains_end_to_end(tmp_path):
+
+    config = _efficient_variant(bucket_by_length=True)
+
+    metrics = _run_smoke_training("", tmp_path, config=config)
+
+    assert math.isfinite(metrics["train_loss"])
+
+
+@pytest.mark.skipif(shutil.which("g++") is None, reason="torch.compile needs a C++ compiler")
+def test_toy_copy_compiled_v2_trains_end_to_end(tmp_path):
+
+    config = _efficient_variant(pack_sequences=True)
+
+    config = replace(
+        config,
+        training=replace(config.training, epochs=1, gradient_checkpointing=False),
+        runtime=replace(config.runtime, compile_model=True),
     )
 
     metrics = _run_smoke_training("", tmp_path, config=config)

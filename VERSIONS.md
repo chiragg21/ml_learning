@@ -271,22 +271,24 @@ All planned tokenizers are now implemented.
 
 ---
 
-## v2 - making it fast and able to handle long sequences (in progress)
+## v2 - making it fast and able to handle long sequences
 
 **Code:** `src/models/v2/` (`modules_v2.py`, `encoder_v2.py`, `decoder_v2.py`, `transformer_v2.py`)
-**Try it:** `configs/toy_copy_v2.py`
+**Try it:** `configs/toy_copy_v2.py` (GQA only), `configs/toy_copy_efficient_v2.py` (everything below)
 
 v2's theme is *efficiency*: everything so far has been about making the
 model learn *better*; v2 is about making it *affordable to run*,
-especially at generation time and with long sequences. It is being built
-one feature at a time; the first two pieces, GQA and local attention, are done. `transformer_v2`
+especially at generation time and with long sequences. `transformer_v2`
 is a drop-in replacement for v1 (same `forward()` signature) and reuses
 v1's RMSNorm, RoPE and SwiGLU modules unchanged.
 
 | Piece | v1 | v2 | Why change |
 |---|---|---|---|
 | Attention | Every head has its own Q, K and V projection | **GQA**: one K/V head shared by a group of query heads (`num_kv_heads`) | Shrinks the K/V projections now and, later, the KV cache |
-| Attention span | Every token attends to every (unmasked) token | **Local attention**: optional sliding window (`window_size`) on self-attention | Limits how far each token looks; the first step toward long-sequence attention |
+| Attention span | Every token attends to every (unmasked) token | **Local attention**: optional sliding window (`window_size`) on self-attention, optionally computed over the band only (`banded`) | Limits how far each token looks, and the banded kernel makes that cheaper |
+| Generation | Recomputes the whole prefix every step | **KV cache** | Per-step cost O(n) instead of O(n²) |
+| Batches | Padded to the longest example | **Sequence packing**, length bucketing, streaming, prefetch | Fewer wasted `<PAD>` tokens, no idle GPU |
+| Training memory/speed | fp32, all activations stored | **bf16/fp16 mixed precision**, **gradient checkpointing**, **torch.compile** | Less memory, faster matmuls |
 
 **GQA (Grouped-Query Attention)** keeps one query projection per head
 but shares each key/value head across `num_heads / num_kv_heads` query
@@ -320,37 +322,81 @@ rows are zeroed instead. See `_local_window_mask` in `modules_v2.py`;
 properties are checked in `tests/test_local_attention_v2.py`.
 **Try it:** `configs/toy_copy_local_v2.py`.
 
-### Still to do in v2
+**KV cache** (`init_cache`/`encode`/`decode_step` on `TransformerV2`,
+used automatically by `Generator`, `use_cache=False` to disable). The
+decoder's keys and values for tokens already generated never change, so
+each step projects only the newest token, appends its (RoPE-rotated,
+`num_kv_heads`-sized) K/V to a per-layer cache and attends over it;
+cross-attention caches the projected encoder output once. Generation goes
+from re-running the whole prefix at every step (O(n²) work per step) to
+O(n) per step. With a cache, self-attention
+is causal by construction (positions decide what is visible), and with a
+`window_size` the cache is trimmed to the `W-1` keys still in reach, so
+its size stops growing. Properties checked in
+`tests/test_model_efficiency_v2.py` (stepwise logits equal the full
+forward pass, with and without a window) and
+`tests/test_data_pipeline_v2.py` (cached and uncached greedy generation
+agree).
 
-- **KV cache:** during autoregressive generation, the decoder's
-  key/value vectors for already-generated tokens never change - caching
-  them instead of recomputing the whole sequence's attention at every
-  new token turns generation from O(n²) into O(n) per step. This is the
-  single biggest practical speedup for text generation and every
-  real inference server relies on it.
-- **Banded/sparse attention kernel:** local attention above is only a
-  mask; computing just the band (or another sparse pattern) is what
-  would actually make long sequences cheaper.
-- **Sequence packing:** instead of padding every batch to its longest
-  sequence (wasting compute on `<PAD>` tokens, as the current pipeline
-  does), concatenate multiple short sequences into one row up to the
-  max length. More total useful tokens processed per batch.
-- **BF16/FP16 mixed precision:** training in a16-bit floating point
-  format instead of 32-bit, for roughly 2x less memory and (on a GPU
-  with tensor cores) significantly faster matmuls. (A first version of
-  this is already wired into `Trainer` - see `training.mixed_precision`
-  in `src/datamodels.py` - v2 is where it becomes load-bearing rather
-  than optional.)
-- **Gradient checkpointing:** trade compute for memory by not storing
-  every layer's activations during the forward pass, recomputing them
-  during backprop instead - lets you train bigger models/longer
-  sequences on the same GPU memory, at some training-time cost.
-- **torch.compile:** JIT-compiles the model's computation graph for
-  faster execution (also already wired as an opt-in flag -
-  `runtime.compile_model` - v2 is where it's expected to matter).
-- **Efficient data pipeline:** streaming data loading, overlapping data
-  loading with compute, and other plumbing to make sure the GPU is never
-  sitting idle waiting for the next batch.
+**Banded attention kernel** (`banded: True` next to `window_size` in the
+encoder/decoder `parameters`). Instead of masking a full S×S score matrix,
+each query gathers just the `2W-1` keys inside its window and attends
+over that band: O(S·W) compute and memory instead of O(S²), same result
+as the masked path (tested for several windows, with causal and padding
+masks, and with packing). Honest limitation: it is plain PyTorch
+(gather + einsum), not a fused GPU kernel, so the gather copies K/V
+`2W-1` times and the speedup only shows once `S` is much larger than
+`W`; a custom/FlashAttention-style kernel would be the next step.
+
+**Sequence packing** (`data.extra["pack_sequences"] = True`). Several
+short examples share one row, filled up to `max_seq_len` on both the
+source and target side, so batches carry far fewer `<PAD>` tokens.
+Examples must not see each other, so each row carries segment ids
+(1, 2, ... per example, 0 = padding) and the model builds a block-
+diagonal mask from them in the encoder, the decoder and cross-attention
+(RoPE needs no per-example reset - it only encodes relative distance).
+The trainer ignores the one label per boundary that would otherwise ask
+the model to predict the next example's `<BOS>`. Packing is static
+(rows fixed once, shuffled as whole rows), and validation is never
+packed so its metrics stay comparable. `PackedSeq2SeqDataset` in
+`src/data/seq2seq.py`; `test_packed_row_matches_separate_examples`
+verifies a packed row gives the same logits as the examples alone.
+
+**Mixed precision** (`training.mixed_precision=True`, `precision="bf16"`
+or `"fp16"`). The `Trainer` already ran autocast and a `GradScaler`
+(fp16 only; CPU falls back to bf16); v2 makes it complete by also
+running validation under autocast with the loss computed in fp32, and by
+keeping the attention masks/softmax safe in low precision (masked rows
+are zeroed, not NaN). Exercised on CPU in the bf16 efficient config; the
+fp16 + `GradScaler` path needs a GPU and has not been run here.
+
+**Gradient checkpointing** (`training.gradient_checkpointing=True`).
+Each encoder/decoder layer is wrapped in `torch.utils.checkpoint`, so
+only layer inputs are kept during the forward pass and activations are
+recomputed in backward: less memory for roughly one extra forward pass of
+compute. Only active in training mode; a test confirms gradients equal
+the un-checkpointed ones. Models without `set_gradient_checkpointing`
+(v0, v1) raise a clear error if it is switched on.
+
+**torch.compile** (`runtime.compile_model=True`). Was already an opt-in
+flag; v2 makes it work end to end - checkpoints now unwrap the compiled
+model, so saved `state_dict` keys have no `_orig_mod.` prefix and load
+into an ordinary model. Smoke-tested on CPU (needs a C++ compiler; the
+test skips without one). Speedups only show on a GPU with real sizes, and
+variable batch shapes can trigger recompilation.
+
+**Efficient data pipeline** (`data.extra` / `runtime`):
+- `streaming: True` (+ `shuffle_buffer`) - `StreamingSeq2SeqDataset`
+  tokenizes lazily instead of encoding the whole corpus up front, shards
+  across DataLoader workers and shuffles with a buffer.
+- `bucket_by_length: True` - `BucketBatchSampler` groups similar-length
+  examples so batches pad less (shuffled chunks, sorted inside each).
+- `runtime.num_workers` with `runtime.extra["prefetch_factor"]` - worker
+  processes prepare upcoming batches while the model computes; host-to-GPU
+  copies are `non_blocking` from pinned memory on CUDA.
+Streaming can't be combined with packing or bucketing (both need all
+lengths up front); the options live in `extra` dicts so existing
+experiment hashes don't change.
 
 ## Future: v3 - scaling up and getting smarter about compute
 

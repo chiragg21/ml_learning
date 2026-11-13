@@ -29,7 +29,9 @@ class CheckpointManager:
         )
 
         checkpoint = {
-            "model_state_dict": model.state_dict(),
+            # torch.compile wraps the model and prefixes every key with
+            # "_orig_mod."; unwrap so checkpoints load into a plain model.
+            "model_state_dict": getattr(model, "_orig_mod", model).state_dict(),
 
             "optimizer_state_dict": (
                 optimizer.state_dict()
@@ -89,7 +91,7 @@ class CheckpointManager:
             weights_only=False,
         )
 
-        model.load_state_dict(
+        getattr(model, "_orig_mod", model).load_state_dict(
             checkpoint["model_state_dict"]
         )
 

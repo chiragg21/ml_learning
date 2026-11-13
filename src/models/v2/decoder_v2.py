@@ -4,6 +4,7 @@ from ..v1.modules_v1 import RMSNorm, RotaryEmbedding, SwiGLUFeedForward
 from .modules_v2 import GroupedQueryAttentionV2
 import torch
 from torch import nn
+from torch.utils.checkpoint import checkpoint
 
 """
                     Decoder Layer (v2: v1's layer with Grouped-Query Attention)
@@ -90,6 +91,7 @@ class DecoderLayerV2(BaseDecoderLayer):
             dropout_param=config.dropout_param,
             use_rope=True,
             window_size=config.window_size,
+            banded=config.banded,
         )
 
         self.cross_attention = GroupedQueryAttentionV2(
@@ -98,6 +100,7 @@ class DecoderLayerV2(BaseDecoderLayer):
             num_kv_heads=config.num_kv_heads,
             dropout_param=config.dropout_param,
             use_rope=False,
+            cross_attention=True,
         )
 
         self.ffn = SwiGLUFeedForward(
@@ -121,6 +124,9 @@ class DecoderLayerV2(BaseDecoderLayer):
             tgt_mask=None,
             tgt_key_padding_mask=None,
             memory_key_padding_mask=None,
+            self_segment_mask=None,
+            cross_segment_mask=None,
+            cache=None,
     ):
 
         # masked self-attention
@@ -132,6 +138,8 @@ class DecoderLayerV2(BaseDecoderLayer):
             rope=self.rope,
             attn_mask=tgt_mask,
             key_padding_mask=tgt_key_padding_mask,
+            segment_mask=self_segment_mask,
+            cache=None if cache is None else cache["self"],
         )
 
         x = x + self.dropout(self_attention_output)
@@ -145,6 +153,8 @@ class DecoderLayerV2(BaseDecoderLayer):
             normed,
             memory,
             key_padding_mask=memory_key_padding_mask,
+            segment_mask=cross_segment_mask,
+            cache=None if cache is None else cache["cross"],
         )
 
         x = x + self.dropout(cross_attention_output)
@@ -171,6 +181,8 @@ class DecoderV2(BaseDecoder):
         self.num_heads = config.num_heads
         self.num_kv_heads = config.num_kv_heads
         self.window_size = config.window_size
+        self.banded = config.banded
+        self.gradient_checkpointing = False
         self.d_ff = config.d_ff
         self.num_layers = config.num_layers
         self.dropout_param = config.dropout_param
@@ -204,6 +216,7 @@ class DecoderV2(BaseDecoder):
                     num_heads=self.num_heads,
                     num_kv_heads=self.num_kv_heads,
                     window_size=self.window_size,
+                    banded=self.banded,
                     d_ff=self.d_ff,
                     dropout_param=self.dropout_param,
                     rope_theta=config.rope_theta,
@@ -222,10 +235,17 @@ class DecoderV2(BaseDecoder):
             tgt_mask=None,
             tgt_key_padding_mask=None,
             memory_key_padding_mask=None,
+            self_segment_mask=None,
+            cross_segment_mask=None,
+            cache=None,
     ):
         batch_size, target_seq_len = target_ids.shape
 
-        if target_seq_len > self.max_seq_len:
+        # With a cache, target_ids holds only the new tokens, so the
+        # length that must fit the RoPE table is past + new.
+        past_len = 0 if cache is None else cache[0]["self"].get("seen", 0)
+
+        if past_len + target_seq_len > self.max_seq_len:
             raise ValueError(
                 "Target seq len is greater than max seq len"
             )
@@ -235,7 +255,8 @@ class DecoderV2(BaseDecoder):
 
         # create causal mask if one wasn't supplied - identical
         # convention to v0 (True = masked position)
-        if tgt_mask is None:
+        # (with a cache, self-attention derives causality from positions)
+        if tgt_mask is None and cache is None:
             tgt_mask = torch.triu(
                 torch.ones(
                     target_seq_len,
@@ -246,7 +267,21 @@ class DecoderV2(BaseDecoder):
                 diagonal=1,
             )
 
-        for layer in self.layers:
+        for layer_index, layer in enumerate(self.layers):
+
+            if self.gradient_checkpointing and self.training:
+                x = checkpoint(
+                    layer,
+                    x,
+                    memory,
+                    tgt_mask,
+                    tgt_key_padding_mask,
+                    memory_key_padding_mask,
+                    self_segment_mask,
+                    cross_segment_mask,
+                    use_reentrant=False,
+                )
+                continue
 
             x = layer(
                 x,
@@ -254,6 +289,9 @@ class DecoderV2(BaseDecoder):
                 tgt_mask=tgt_mask,
                 tgt_key_padding_mask=tgt_key_padding_mask,
                 memory_key_padding_mask=memory_key_padding_mask,
+                self_segment_mask=self_segment_mask,
+                cross_segment_mask=cross_segment_mask,
+                cache=None if cache is None else cache[layer_index],
             )
 
         return self.final_norm(x)

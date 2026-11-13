@@ -10,6 +10,8 @@ class LayerConfigV2:
     d_ff: int
     num_kv_heads: int | None = None
     window_size: int | None = None
+    # Compute local attention over the band only (needs window_size).
+    banded: bool = False
     dropout_param: float = 0.1
     rope_theta: float = 10000.0
 
@@ -28,6 +30,8 @@ class EncoderConfigV2:
     # Local-attention window for self-attention (see
     # GroupedQueryAttentionV2); None means full attention.
     window_size: int | None = None
+    # Compute local attention over the band only (needs window_size).
+    banded: bool = False
     dropout_param: float = 0.1
     rope_theta: float = 10000.0
 
@@ -41,6 +45,8 @@ class DecoderConfigV2:
     num_layers: int
     num_kv_heads: int | None = None
     window_size: int | None = None
+    # Compute local attention over the band only (needs window_size).
+    banded: bool = False
     dropout_param: float = 0.1
     rope_theta: float = 10000.0
 
