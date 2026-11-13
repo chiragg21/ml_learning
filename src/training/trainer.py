@@ -76,8 +76,18 @@ class Trainer:
 
         if config.runtime.compile_model:
 
+            # dynamic=True compiles once for symbolic/varying shapes from
+            # the start. Left at the default, torch.compile specializes
+            # per exact input shape and only falls back to dynamic after
+            # it sees enough distinct shapes recompile - each of which is
+            # itself a slow compile. Combined with bucket_by_length
+            # (deliberately varying batch shapes), the default caused a
+            # real recompilation storm: a live run sat at ~0.7GB GPU
+            # memory with no training progress for 7+ minutes, all of it
+            # spent recompiling instead of computing.
             self.model = torch.compile(
-                self.model
+                self.model,
+                dynamic=True,
             )
 
         # =============================================
