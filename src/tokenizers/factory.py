@@ -8,6 +8,7 @@ from src.tokenizers.v0.tokenizer_v0 import CharTokenizer
 from src.tokenizers.v1.tokenizer_v1 import BPETokenizerV1
 from src.tokenizers.v2.tokenizer_v2 import WordPieceTokenizerV2
 from src.tokenizers.v3.tokenizer_v3 import UnigramTokenizerV3
+from src.tokenizers.v4.tokenizer_v4 import PretrainedTokenizerV4
 
 
 class TokenizerFactory:
@@ -22,6 +23,7 @@ class TokenizerFactory:
         "bpe_v1": BPETokenizerV1,
         "wordpiece_v2": WordPieceTokenizerV2,
         "unigram_v3": UnigramTokenizerV3,
+        "pretrained_v4": PretrainedTokenizerV4,
     }
 
     @classmethod

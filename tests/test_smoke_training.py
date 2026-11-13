@@ -15,6 +15,13 @@ version-by-version workflow this supports.
 from __future__ import annotations
 
 import math
+from dataclasses import replace
+
+from tokenizers import Tokenizer
+from tokenizers.decoders import ByteLevel as ByteLevelDecoder
+from tokenizers.models import BPE
+from tokenizers.pre_tokenizers import ByteLevel
+from tokenizers.trainers import BpeTrainer
 
 from artifacts.manager import ArtifactManager, ExperimentManager
 from scripts.train import build_tokenizer, load_config
@@ -23,9 +30,9 @@ from src.data.seq2seq import TokenizedSeq2SeqDataset
 from src.training.trainer import Trainer
 
 
-def _run_smoke_training(config_path: str, tmp_path) -> dict:
+def _run_smoke_training(config_path: str, tmp_path, config=None) -> dict:
 
-    config = load_config(config_path)
+    config = config or load_config(config_path)
 
     artifact_manager = ArtifactManager(root_dir=tmp_path / "artifacts")
     experiment = ExperimentManager(config, artifact_manager=artifact_manager)
@@ -104,5 +111,35 @@ def test_toy_copy_unigram_v3_trains_end_to_end(tmp_path):
 def test_toy_copy_local_v2_trains_end_to_end(tmp_path):
 
     metrics = _run_smoke_training("configs/toy_copy_local_v2.py", tmp_path)
+
+    assert math.isfinite(metrics["train_loss"])
+
+
+def test_toy_copy_pretrained_v4_trains_end_to_end(tmp_path):
+
+    # The real config downloads GPT-2's tokenizer from the Hub, so the
+    # smoke test swaps in a tiny local tokenizer.json instead.
+    tokenizer = Tokenizer(BPE())
+    tokenizer.pre_tokenizer = ByteLevel(add_prefix_space=False)
+    tokenizer.decoder = ByteLevelDecoder()
+    tokenizer.train_from_iterator(
+        ["abcdefghijklmnopqrstuvwxyz"] * 10,
+        BpeTrainer(
+            vocab_size=300,
+            special_tokens=["<|endoftext|>"],
+            initial_alphabet=ByteLevel.alphabet(),
+        ),
+    )
+
+    source = tmp_path / "tokenizer.json"
+    tokenizer.save(str(source))
+
+    config = load_config("configs/toy_copy_pretrained_v4.py")
+    config = replace(
+        config,
+        tokenizer=replace(config.tokenizer, parameters={"source": str(source)}),
+    )
+
+    metrics = _run_smoke_training("", tmp_path, config=config)
 
     assert math.isfinite(metrics["train_loss"])

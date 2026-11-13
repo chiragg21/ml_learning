@@ -225,6 +225,7 @@ are registered in `src/tokenizers/factory.py`.
 | `bpe_v1` | Byte-level BPE trained on our corpus | `src/tokenizers/v1/tokenizer_v1.py` |
 | `wordpiece_v2` | WordPiece trained on our corpus | `src/tokenizers/v2/tokenizer_v2.py` |
 | `unigram_v3` | Unigram (SentencePiece-style) trained on our corpus | `src/tokenizers/v3/tokenizer_v3.py` |
+| `pretrained_v4` | A tokenizer someone else already trained, loaded from the Hugging Face Hub or a local `tokenizer.json` | `src/tokenizers/v4/tokenizer_v4.py` |
 
 **WordPiece (`wordpiece_v2`)** is the tokenizer BERT uses. It builds its
 vocabulary like BPE, but merges the pair that most increases corpus
@@ -248,7 +249,25 @@ of each word. Like SentencePiece, whitespace is an ordinary symbol
 was seen in training; an unseen character becomes `<UNK>`.
 **Try it:** `configs/toy_copy_unigram_v3.py`.
 
-Still not implemented: pretrained tokenizers.
+**Pretrained (`pretrained_v4`)** loads an already-trained tokenizer
+(GPT-2's byte-level BPE, BERT's WordPiece, ...) instead of training one
+on our corpus, which is ignored. Set `source` in the tokenizer
+`parameters` to a Hub id (downloaded on first use, so it needs network)
+or a path to a local `tokenizer.json`; the file's own normalizer,
+pre-tokenizer, model and decoder are used unchanged. The pipeline needs
+`<PAD>/<UNK>/<BOS>/<EOS>` ids that pretrained vocabularies often lack
+(GPT-2 only has `<|endoftext|>`, and byte-level BPEs have no unknown
+token), so missing ones are appended as new ids, making `vocab_size`
+slightly larger than the original. Pass `pad_token`/`unk_token`/
+`bos_token`/`eos_token` to reuse an existing token instead (e.g.
+`eos_token="<|endoftext|>"`, or `unk_token="[UNK]"` for BERT); a token
+that isn't in the vocabulary raises an error. The pretrained
+post-processor's own markers (BERT's `[CLS]`/`[SEP]`) are never added,
+so BOS/EOS only appear via `add_bos`/`add_eos`. Tests use a tiny locally
+saved tokenizer, since the Hub isn't reachable from CI-like sandboxes.
+**Try it:** `configs/toy_copy_pretrained_v4.py` (needs network).
+
+All planned tokenizers are now implemented.
 
 ---
 
