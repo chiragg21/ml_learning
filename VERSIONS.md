@@ -260,13 +260,14 @@ Still not implemented: pretrained tokenizers.
 v2's theme is *efficiency*: everything so far has been about making the
 model learn *better*; v2 is about making it *affordable to run*,
 especially at generation time and with long sequences. It is being built
-one feature at a time; the first piece, GQA, is done. `transformer_v2`
+one feature at a time; the first two pieces, GQA and local attention, are done. `transformer_v2`
 is a drop-in replacement for v1 (same `forward()` signature) and reuses
 v1's RMSNorm, RoPE and SwiGLU modules unchanged.
 
 | Piece | v1 | v2 | Why change |
 |---|---|---|---|
 | Attention | Every head has its own Q, K and V projection | **GQA**: one K/V head shared by a group of query heads (`num_kv_heads`) | Shrinks the K/V projections now and, later, the KV cache |
+| Attention span | Every token attends to every (unmasked) token | **Local attention**: optional sliding window (`window_size`) on self-attention | Limits how far each token looks; the first step toward long-sequence attention |
 
 **GQA (Grouped-Query Attention)** keeps one query projection per head
 but shares each key/value head across `num_heads / num_kv_heads` query
@@ -281,6 +282,25 @@ scales with `num_kv_heads`, which is why the KV cache below is the
 natural next step. See `GroupedQueryAttentionV2` in `modules_v2.py`;
 properties are checked in `tests/test_gqa_v2.py`.
 
+**Local attention (sliding window)** restricts self-attention so each
+token only sees positions less than `window_size` away from itself
+(itself plus `window_size - 1` neighbours per side; in the decoder the
+causal mask leaves just the previous ones). Set `window_size` in the
+encoder/decoder `parameters`; omitting it means full attention, and a
+window at least as long as the sequence is identical to full attention.
+Cross-attention is never windowed (decoder and encoder positions aren't
+in the same frame), and passing a window to it raises an error. Stacked
+layers still carry information further than one window: after L layers a
+token is influenced by tokens up to `L * (window_size - 1)` positions
+away. Honest limitation: the window is applied as a mask over the full
+score matrix, so it changes *what* is attended to but not the O(n²)
+compute or memory - a banded kernel would be needed for the speedup. One
+gotcha found while building it: a `<PAD>` query whose entire window is
+also padding has every key masked, which makes softmax return NaN; those
+rows are zeroed instead. See `_local_window_mask` in `modules_v2.py`;
+properties are checked in `tests/test_local_attention_v2.py`.
+**Try it:** `configs/toy_copy_local_v2.py`.
+
 ### Still to do in v2
 
 - **KV cache:** during autoregressive generation, the decoder's
@@ -289,9 +309,9 @@ properties are checked in `tests/test_gqa_v2.py`.
   new token turns generation from O(n²) into O(n) per step. This is the
   single biggest practical speedup for text generation and every
   real inference server relies on it.
-- **Local/sparse attention:** full self-attention costs O(n²) in
-  sequence length. Restricting each position to attend only to a local
-  window (or another sparse pattern) makes long sequences tractable.
+- **Banded/sparse attention kernel:** local attention above is only a
+  mask; computing just the band (or another sparse pattern) is what
+  would actually make long sequences cheaper.
 - **Sequence packing:** instead of padding every batch to its longest
   sequence (wasting compute on `<PAD>` tokens, as the current pipeline
   does), concatenate multiple short sequences into one row up to the

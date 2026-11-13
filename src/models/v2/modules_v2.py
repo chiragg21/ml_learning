@@ -38,6 +38,18 @@ class GroupedQueryAttentionV2(nn.Module):
     query heads. Rotating before expanding is equivalent (every copy gets
     the same rotation) but does group_size times less rotary work.
 
+    Optional local (sliding-window) attention, for self-attention only:
+    with window_size = W each token attends only to positions at distance
+    less than W from itself (itself plus W-1 neighbours on each side; the
+    decoder's causal mask leaves just the W-1 previous ones). Stacking
+    layers still lets information travel further - after L layers a
+    token is influenced by tokens up to L*(W-1) positions away - which is
+    how Mistral and Longformer-style models cover long inputs. Here the
+    window is applied as a mask on the full score matrix, so this
+    version changes *what* is attended to, not the O(n^2) cost; it is
+    the semantic half of sparse attention that a banded kernel would
+    later make cheap. window_size=None is full attention.
+
     Learnable parameters (no biases): with kv_dim = num_kv_heads*head_dim
     Wq, Wo: D*D each; Wk, Wv: D*kv_dim each
     total = 2*D*D + 2*D*kv_dim
@@ -52,6 +64,7 @@ class GroupedQueryAttentionV2(nn.Module):
         num_kv_heads: int | None = None,
         dropout_param: float = 0.1,
         use_rope: bool = False,
+        window_size: int | None = None,
     ):
         super().__init__()
 
@@ -64,11 +77,15 @@ class GroupedQueryAttentionV2(nn.Module):
         if num_heads % num_kv_heads != 0:
             raise ValueError("num_heads must be divisible by num_kv_heads")
 
+        if window_size is not None and window_size < 1:
+            raise ValueError("window_size must be at least 1")
+
         self.num_heads = num_heads
         self.num_kv_heads = num_kv_heads
         self.group_size = num_heads // num_kv_heads
         self.head_dim = d_model // num_heads
         self.use_rope = use_rope
+        self.window_size = window_size
 
         kv_dim = num_kv_heads * self.head_dim
 
@@ -98,6 +115,32 @@ class GroupedQueryAttentionV2(nn.Module):
         x = x.transpose(1, 2).contiguous()
 
         return x.view(batch_size, seq_len, num_heads * head_dim)
+
+    # ==================================================
+    # Local Attention
+    # ==================================================
+
+    def _local_window_mask(
+        self,
+        query_len: int,
+        key_len: int,
+        device: torch.device,
+    ) -> torch.Tensor:
+
+        if query_len != key_len:
+            raise ValueError("window_size is only valid for self-attention")
+
+        positions = torch.arange(query_len, device=device)
+        distance = positions[:, None] - positions[None, :]
+
+        # abs() so one rule serves both sides: the encoder sees a band
+        # around each token, and the decoder's causal mask already removes
+        # the future half of that band.
+        return distance.abs() >= self.window_size
+
+    # ==================================================
+    # Forward
+    # ==================================================
 
     def forward(
         self,
@@ -131,6 +174,14 @@ class GroupedQueryAttentionV2(nn.Module):
         scale = self.head_dim ** -0.5
         scores = torch.matmul(q, k.transpose(-2, -1)) * scale
 
+        if self.window_size is not None:
+            window_mask = self._local_window_mask(
+                q.shape[-2],
+                k.shape[-2],
+                device=scores.device,
+            )
+            scores = scores.masked_fill(window_mask, float("-inf"))
+
         if attn_mask is not None:
             scores = scores.masked_fill(attn_mask, float("-inf"))
 
@@ -139,6 +190,14 @@ class GroupedQueryAttentionV2(nn.Module):
             scores = scores.masked_fill(mask, float("-inf"))
 
         attn_weights = torch.softmax(scores, dim=-1)
+
+        if self.window_size is not None:
+            # A <PAD> query whose whole window is also <PAD> has every key
+            # masked, and softmax over all -inf is NaN. Full attention
+            # can't hit this (some real token is always in reach), but
+            # NaN at a padding position still poisons the loss and
+            # gradients, so those rows become zeros instead.
+            attn_weights = torch.nan_to_num(attn_weights)
         attn_weights = self.dropout(attn_weights)
 
         context = torch.matmul(attn_weights, v)

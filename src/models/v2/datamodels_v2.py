@@ -9,6 +9,7 @@ class LayerConfigV2:
     num_heads: int
     d_ff: int
     num_kv_heads: int | None = None
+    window_size: int | None = None
     dropout_param: float = 0.1
     rope_theta: float = 10000.0
 
@@ -24,6 +25,9 @@ class EncoderConfigV2:
     # None means one per query head, i.e. ordinary multi-head attention;
     # 1 is multi-query attention; anything in between is GQA proper.
     num_kv_heads: int | None = None
+    # Local-attention window for self-attention (see
+    # GroupedQueryAttentionV2); None means full attention.
+    window_size: int | None = None
     dropout_param: float = 0.1
     rope_theta: float = 10000.0
 
@@ -36,6 +40,7 @@ class DecoderConfigV2:
     d_ff: int
     num_layers: int
     num_kv_heads: int | None = None
+    window_size: int | None = None
     dropout_param: float = 0.1
     rope_theta: float = 10000.0
 

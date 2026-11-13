@@ -98,6 +98,7 @@ class EncoderLayerV2(BaseEncoderLayer):
             num_kv_heads=config.num_kv_heads,
             dropout_param=config.dropout_param,
             use_rope=True,
+            window_size=config.window_size,
         )
 
         self.ffn = SwiGLUFeedForward(
@@ -174,6 +175,7 @@ class EncoderV2(BaseEncoder):
         self.d_model = config.d_model
         self.num_heads = config.num_heads
         self.num_kv_heads = config.num_kv_heads
+        self.window_size = config.window_size
         self.d_ff = config.d_ff
         self.num_layers = config.num_layers
         self.dropout_param = config.dropout_param
@@ -202,6 +204,7 @@ class EncoderV2(BaseEncoder):
                     d_model=self.d_model,
                     num_heads=self.num_heads,
                     num_kv_heads=self.num_kv_heads,
+                    window_size=self.window_size,
                     d_ff=self.d_ff,
                     dropout_param=self.dropout_param,
                     rope_theta=config.rope_theta,
