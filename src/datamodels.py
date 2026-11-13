@@ -71,6 +71,13 @@ class TrainingConfig:
     # done. Keep only the most recent N; None keeps all of them.
     save_total_limit: int | None = 3
 
+    # Smooths the cross-entropy target distribution instead of a hard
+    # one-hot: the correct token gets most of the probability mass, the
+    # rest spreads thinly over the vocabulary. Keeps the model from
+    # becoming overconfident on a single "correct" token, a standard
+    # NMT regularizer. 0.0 is plain cross-entropy (the old behavior).
+    label_smoothing: float = 0.0
+
     extra: dict[str, Any] = field(default_factory=dict)
 
 

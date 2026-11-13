@@ -628,6 +628,7 @@ class Trainer:
                 output.logits.reshape(-1, vocab_size),
                 labels.reshape(-1),
                 ignore_index=pad_token_id,
+                label_smoothing=self.config.training.label_smoothing,
             )
 
             # v3 models report extra training losses (MoE load balancing,
