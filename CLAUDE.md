@@ -3,10 +3,9 @@
 This project implements a transformer from scratch across versions
 v0→v1→v2→v3 (see [VERSIONS.md](VERSIONS.md) for what each version is
 and what's still unimplemented - check it before starting work to see
-which version/feature is next). v0 and v1 are done, tested on real
-training runs, and pushed. WordPiece (`wordpiece_v2`) is also done. v2, v3, and the remaining
-tokenizers (Unigram/SentencePiece, pretrained tokenizers) are not yet
-implemented.
+which version/feature is next - VERSIONS.md is the source of truth on
+progress, not this file, since it's updated every time a version
+lands).
 
 ## Workflow for implementing new versions/features
 
@@ -20,12 +19,20 @@ implemented.
    catch integration bugs (shape mismatches, wrong tensor dtypes,
    config wiring) immediately, instead of discovering them hours into
    a real Colab training run.
-2. **Finish one version/feature, smoke-test it, then commit and push
-   before starting the next one.** Do not batch multiple
-   versions/features into one push at the end of a session. Each push
-   should leave `master` in a working, tested state. If a session gets
-   interrupted (e.g. hits a usage quota) mid-version, whatever was
-   already finished and tested is already safe on `origin/master`.
+2. **Finish one entire version/tokenizer - every piece it's defined to
+   have, per VERSIONS.md - before committing and pushing.** The unit
+   of "done" is the whole version, not one sub-feature inside it: e.g.
+   v2 is GQA + local attention + KV cache + a banded kernel + sequence
+   packing + mixed precision + gradient checkpointing + torch.compile
+   + an efficient data pipeline, all together, not one push per
+   sub-feature. Smoke-test each piece as it's written, but hold the
+   commit until the entire version's checklist in VERSIONS.md is
+   implemented and every test passes - only then commit and push,
+   once, for that whole version. Do not batch *multiple different*
+   versions into one push either - one version per push, but that
+   version complete, not partial. If a run can't fit the whole version
+   in its budget, it should push nothing rather than push a fragment;
+   a later run starts over on that version from a clean `master`.
 3. Update [VERSIONS.md](VERSIONS.md) in the same commit when a version
    moves from "Future" to implemented, so the next session (or a
    scheduled one resuming after a quota reset) can tell what's left
