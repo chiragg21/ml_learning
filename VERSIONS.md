@@ -10,6 +10,12 @@ If you just want to *run* something (train a model, generate text), see
 [README.md](README.md) instead - this file is about what the models
 themselves are made of.
 
+Want more depth than this file gives - actual tensor shapes, line-by-line
+mechanism, and the "why can't I just..." questions (can I swap tokenizers
+freely? why does the model have to match the tokenizer it was trained
+with?)? See [LEARNING.md](LEARNING.md), the deep-dive companion to this
+file.
+
 ## Before v0: the five-minute transformer primer
 
 A transformer for a task like translation has two halves:
