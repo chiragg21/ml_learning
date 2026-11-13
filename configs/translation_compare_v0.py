@@ -132,7 +132,15 @@ CONFIG = ExperimentConfig(
     evaluation=EvaluationConfig(),
     runtime=RuntimeConfig(
         num_workers=2,
-        compile_model=True,
+        # torch.compile disabled: on this T4, torch._inductor hit
+        # "Not enough SMs to use max_autotune_gemm mode" and then
+        # stalled indefinitely (GPU memory near-zero, no training
+        # progress for 12+ minutes, reproduced across two restarts).
+        # This is a CUDA-specific Inductor stall that can't be caught
+        # by testing on CPU-only dev hardware - don't re-enable
+        # without verifying on a real GPU first. fp16 + bucketing +
+        # parallel workers are the optimizations that actually help.
+        compile_model=False,
         extra={"prefetch_factor": 4},
     ),
 )
