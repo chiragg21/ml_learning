@@ -1,0 +1,115 @@
+from src.datamodels import (
+    ComponentConfig,
+    DataConfig,
+    EvaluationConfig,
+    ExperimentConfig,
+    ModelConfig,
+    PipelineStepConfig,
+    RuntimeConfig,
+    TokenizerConfig,
+    TrainingConfig,
+)
+
+# One of four configs (translation_compare_v0.py .. _v3.py) meant to be
+# trained on the *same* data/tokenizer/training budget, one version at a
+# time, in separate sessions, so the resulting metrics are a fair
+# apples-to-apples comparison of architecture alone. Everything below
+# the model section is identical to translation_compare_v0.py/_v1.py on
+# purpose.
+#
+# v2's model section enables GQA (num_kv_heads=2, shared across query
+# heads - see VERSIONS.md/LEARNING.md) to actually exercise the
+# parameter/memory saving this comparison is meant to surface.
+# window_size/banded are deliberately left unset: OPUS-100 sentences are
+# short (<=160 tokens after filtering), so a sliding window would only
+# restrict context without any real compute saving at this length - it
+# exists for long-sequence tasks, which this isn't. Isolating GQA alone
+# keeps this run's result attributable to one change, not several.
+MAX_SEQ_LEN = 160
+
+CONFIG = ExperimentConfig(
+    schema_version="0.1.0",
+    model=ModelConfig(
+        transformer=ComponentConfig(
+            name="transformer",
+            version="v2",
+        ),
+        encoder=ComponentConfig(
+            name="encoder",
+            version="v2",
+            parameters={
+                "max_seq_len": MAX_SEQ_LEN,
+                "d_model": 384,
+                "num_heads": 8,
+                "d_ff": 1536,
+                "num_layers": 4,
+                "dropout_param": 0.1,
+                "num_kv_heads": 2,
+            },
+        ),
+        decoder=ComponentConfig(
+            name="decoder",
+            version="v2",
+            parameters={
+                "max_seq_len": MAX_SEQ_LEN + 2,
+                "d_model": 384,
+                "num_heads": 8,
+                "d_ff": 1536,
+                "num_layers": 4,
+                "dropout_param": 0.1,
+                "num_kv_heads": 2,
+            },
+        ),
+    ),
+    tokenizer=TokenizerConfig(
+        name="bpe",
+        version="v1",
+        parameters={
+            # Proportional to this model's size, not a pretrained
+            # tokenizer's 30k+ vocab sized for a much bigger model.
+            "vocab_size": 8000,
+        },
+    ),
+    data=DataConfig(
+        name="translation",
+        version="v0",
+        parameters={
+            "data_dir": "data/raw/opus100_en_fr",
+            "source_lang": "en",
+            "target_lang": "fr",
+            "max_train_pairs": 500000,
+            "max_val_pairs": 2000,
+            "seed": 42,
+        },
+        steps=(
+            PipelineStepConfig(
+                name="filter_by_length",
+                parameters={"max_len": MAX_SEQ_LEN},
+            ),
+        ),
+        # OPUS-100 sentence lengths vary a lot; grouping similar lengths
+        # into the same batch means less of each batch is wasted <PAD>
+        # tokens, which eases memory pressure and speeds training -
+        # complements fp16 below rather than competing with it.
+        extra={"bucket_by_length": True},
+    ),
+    training=TrainingConfig(
+        epochs=5,
+        # Kept identical to translation_compare_v0.py on purpose - see
+        # that file's comment for why 128/fp16 was chosen over a bigger
+        # batch_size at this GPU's memory headroom.
+        batch_size=128,
+        learning_rate=3e-4,
+        scheduler="linear_warmup",
+        warmup_steps=250,
+        save_every_n_steps=500,
+        mixed_precision=True,
+        precision="fp16",
+    ),
+    evaluation=EvaluationConfig(),
+    runtime=RuntimeConfig(
+        num_workers=2,
+        compile_model=True,
+        extra={"prefetch_factor": 4},
+    ),
+)
