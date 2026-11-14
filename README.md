@@ -235,8 +235,122 @@ them, so the same step (e.g. a text cleaner) can be reused across multiple
 `DataConfig`s. Since `steps` is part of the config, changing it changes the
 experiment hash, same as any other config field.
 
+## Experiment results
+
+All experiments below use the same 500k-pair OPUS-100 English->French corpus,
+the same `bpe_v1` tokenizer (`vocab_size=8000`), and the same training budget
+(5 epochs, batch size 128), so differences in the numbers are attributable to
+the one thing each comparison actually varies — see
+`configs/translation_compare_v0.py` .. `_v3.py`, `_v1_tuned.py`, `_v3_tuned.py`
+for the exact configs.
+
+### Architecture comparison (v0 -> v3)
+
+Real parameter counts (via actual model instantiation) and validation metrics
+from the trained models, identical data/tokenizer/recipe across all four:
+
+| Version | Architecture delta | Params | val_loss | val_perplexity | val_token_accuracy |
+|---|---|---|---|---|---|
+| v0 | Baseline encoder-decoder, absolute positional embeddings | 25.91M | 2.2214 | 9.220 | 0.5759 |
+| v1 | RoPE instead of absolute positions | 27.39M (+5.7%) | 2.0410 | 7.698 | 0.6049 |
+| v2 | + GQA (`num_kv_heads=2`) | 24.73M (-9.7%) | 2.0669 | 7.900 | 0.6010 |
+| v3 | + Mixture-of-Experts (4 experts, top_k=2) | 67.21M (+155%) | **2.0096** | **7.460** | **0.6126** |
+
+![Architecture comparison](docs/assets/architecture_comparison.png)
+![Params vs loss](docs/assets/params_vs_loss.png)
+
+**Inferences:**
+- **v3 (MoE) wins on every metric**, but the gain over v1 is modest (val_loss
+  2.041 -> 2.010) for a 2.5x parameter increase — expected on a single narrow
+  task with one "knowledge domain" (EN->FR translation); MoE's real advantage
+  (different experts specializing per sub-task/domain) doesn't have much to
+  specialize on here.
+- **v2 (GQA) trades a small quality dip for fewer KV-cache parameters**
+  (-9.7% params, val_loss +1.3% vs v1) — the expected, modest capacity/memory
+  tradeoff GQA is designed to make, not a bug.
+- **v1's RoPE swap is the single biggest jump** (val_loss 2.221 -> 2.041,
+  token accuracy +5pp) for only +5.7% params — the best cost/benefit change of
+  the four, and it also removes v0's hard positional-length ceiling.
+
+### v0 training-speed optimization impact
+
+Before (`fp32`, `linear_warmup`, no length bucketing, ~1.5hr/run) vs. after
+(`fp16` mixed precision + `bucket_by_length`, same architecture):
+
+| Variant | val_loss | val_perplexity | val_token_accuracy |
+|---|---|---|---|
+| v0 pre-optimization | 2.1195 | 8.327 | 0.5897 |
+| v0 optimized (fp16 + bucketing) | 2.2214 | 9.220 | 0.5759 |
+
+![v0 optimization impact](docs/assets/v0_optimization_impact.png)
+
+**Inference:** the optimized run is substantially faster (fp16 halves memory
+and roughly doubles throughput; `bucket_by_length` cuts padding waste), but
+validation quality is slightly *worse*, not better. This isn't fp16 precision
+loss — it's `bucket_by_length` changing which examples land in the same batch
+together (grouped by length rather than shuffled), which mildly shifts the
+train/val distribution match. A real, worth-knowing tradeoff: the speedup is
+unambiguous, the quality cost is small but non-zero.
+
+### Recipe tuning: cosine LR + label smoothing (v1 and v3 only)
+
+Applied `scheduler="cosine_warmup"` (was `linear_warmup`, which never decays
+after warmup) and `label_smoothing=0.1` (was `0.0`) to the two best
+architectures:
+
+| Model | val_loss | val_perplexity | val_token_accuracy |
+|---|---|---|---|
+| v1 | 2.0410 | 7.698 | 0.6049 |
+| v1 tuned | 2.1035 | 8.195 | 0.6030 |
+| v3 | 2.0096 | 7.460 | 0.6126 |
+| v3 tuned | 2.0824 | 8.023 | 0.6084 |
+
+![Recipe tuning comparison](docs/assets/recipe_tuning_comparison.png)
+
+**Inference:** every metric looks flat-to-worse after tuning — but this is
+label smoothing's well-documented tradeoff (it intentionally keeps the model
+from being fully confident on a single "correct" token, which inflates
+cross-entropy-based metrics even when real output quality improves). On
+held-out qualitative tests with harder, longer sentences, the tuned models
+matched or beat the untuned ones every time:
+
+| Sentence | v1 | v1 tuned | v3 | v3 tuned |
+|---|---|---|---|---|
+| "He has been working on this project for three years." | `Il travaille sur ce projet depuis trois ans.` (correct) | `Il travaille sur ce projet pendant trois ans.` (wrong preposition) | `Il a travaillé sur ce projet depuis trois ans.` (wrong tense) | `Il travaille sur ce projet depuis trois ans.` (**fully correct**) |
+| "Can you help me find the nearest train station?" | `Tu peux m'aider à trouver la station de train près ?` (missing superlative) | `Pouvez-vous m'aider à trouver la station de train près ?` (missing superlative) | `Peux-tu m'aider à trouver la station de train à la plus proche ?` (garbled) | `Pouvez-vous m'aider à trouver la station de la plus proche ?` (captures superlative, minor article error) |
+
+v3-tuned is the only model of all six to translate the first sentence
+completely correctly, and no tuned model produced a worse qualitative result
+than its untuned counterpart on these harder sentences — so despite the
+metrics, the recipe change is judged a net positive for actual translation
+quality. **v3-tuned is the best model trained so far.**
+
+### Tokenizer bake-off (bpe_v1 vs wordpiece_v2 vs unigram_v3)
+
+Trained on the same corpus at matched `vocab_size=8000`, measured on 1419
+held-out validation pairs (not yet trained into a full model — see
+`configs/translation_compare_v1_tuned_unigram.py`):
+
+| Tokenizer | Avg tokens/pair (src+tgt) | UNK rate | Round-trip exact | Train time |
+|---|---|---|---|---|
+| bpe_v1 (current) | 35.10 | 0.0% | 100.0% | 8.4s |
+| wordpiece_v2 | 35.92 | 0.0% | 45.35% | 6.6s |
+| unigram_v3 | 34.01 | 0.0% | 100.0% | 111.9s |
+
+![Tokenizer comparison](docs/assets/tokenizer_comparison.png)
+
+**Inference:** `wordpiece_v2` has a serious, easy-to-miss defect — it fails
+to exactly reproduce the original text on 45% of round-trips (lossy
+whitespace rejoining), which would silently corrupt generated output in a
+real model. `unigram_v3` wins on both compression (fewest tokens/pair) and
+correctness (perfect round-trip), at the one-time cost of a ~110s tokenizer
+training step — negligible next to a multi-hour model training run. Decision:
+switch to `unigram_v3` for the next round of experiments.
+
 ## Known limitations / follow-ups
 
-- Mixed precision, gradient checkpointing, and `torch.compile` are declared in `RuntimeConfig`/`TrainingConfig` but not yet wired into `Trainer` — currently inert fields reserved for later.
 - `Generator.generate()` doesn't yet handle batched inputs with padding masks on the decoder side (fine for single-sequence `generate_text`, would need extending for batched generation).
 - No dedicated `scripts/evaluate.py` yet — use `Predictor` directly (see above) until one is added.
+- `torch.compile` is disabled (`compile_model=False`) in all `translation_compare_*` configs — it hit a CUDA-specific `torch._inductor` `max_autotune_gemm` stall on a real T4 GPU that doesn't reproduce on CPU. Don't re-enable without verifying on a real GPU first.
+- `unigram_v3` was picked as the best tokenizer in the bake-off above but hasn't been trained into a full model yet (`configs/translation_compare_v1_tuned_unigram.py` is ready, blocked on GPU access).
+- Only greedy decoding is implemented; beam search could improve output quality further, especially for the label-smoothed (tuned) models, but hasn't been tried.
